@@ -1,0 +1,21 @@
+{
+   "rollers":[
+      {
+         "name":"1B3AFF",
+         "IP":"192.168.1.2",
+         "rollerUsername":"user",
+         "rollerPassword":"password"
+      }
+   ],
+   "WeeWxGaugeFile":{
+      "location":"/tmp/gauge-data.txt",
+      "readPeriodSecs":60
+   },
+   "thresholds":{
+      "avgWindThreshold":4.9,
+      "avgGustThreshold":70.0,
+      "timeOpenThresholdMinutes":1,
+      "timeRestoreThresholdMinutes":2
+   }
+}
+
