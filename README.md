@@ -19,6 +19,12 @@ This is a simple tool to control the rollers based on current wind conditions, w
     * pip install requests
   * statistics
     * pip install statistics
+  * astral
+    * pip install astral
+    * pip install astral==1.10.1 (for Python 2.7)
+  * APscheduler
+    * pip install APscheduler
+    * pip install APScheduler==3.2.0 (for older Python 2.7 versions)
 
 ## My current configuration
 
