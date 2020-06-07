@@ -22,8 +22,9 @@
       "latitude":54.32,
       "longitude":12.34,
       "city":"City",
-      "country":"Country",
-      "timezone":"Europe/London"
+      "region":"Country",
+      "timezone":"Europe/London",
+      "elevation":0
    }
 }
 

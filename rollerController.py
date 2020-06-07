@@ -18,12 +18,16 @@ from statistics import mean
 from enum import Enum
 
 import threading
-import apscheduler
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.executors.pool import ThreadPoolExecutor, ProcessPoolExecutor
+executors = {
+    'default': ThreadPoolExecutor(1),
+}
 
 import argparse
 import logging as log
 
-import astral
+from astral import Astral, Location
 
 
 class ExtendAction(argparse.Action):
@@ -110,6 +114,15 @@ class ShellyRollerController:
 					log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 				self.waitUntilStopGetState()
 
+	# this is for the scheduled events to minimize interference
+	def setStateIfNotWindy(self, pos):
+		assert(isinstance(pos, int))
+		assert(pos >= 0 and pos <= 100)
+		if(self.savedState != None):
+			self.setState(pos)
+		else:
+			# if the roller is up due to the wind, we set the restore position instead
+			self.savedState = pos
 
 	def requestShutdown(self):
 		self.shutdownRequested = True
@@ -167,13 +180,19 @@ gaugeFile = '/tmp/gauge-data.txt'
 sleepTime =  60
 historyLength = 5
 
-latitude = 0.0
-longitude = 0.0
-city = ""
-country = ""
-timezone = ""
+a = Astral()
+a.solar_depression = 'civil'
 
-zaluzie = collections.deque()
+city = Location()
+city.name = 'City'
+city.region = 'Country'
+city.latitude = 0.0
+city.longitude = 0.0
+city.timezone = 'UTC'
+city.elevation = 0
+
+
+rollers = collections.deque()
 
 with open(args.configFile) as configFile:
 	def assignValFromDict(d, k, default):
@@ -187,17 +206,18 @@ with open(args.configFile) as configFile:
 		timeRestoreThresholdMinutes = assignValFromDict(config['thresholds'],'timeRestoreThresholdMinutes', timeRestoreThresholdMinutes)
 	if "rollers" in config:
 		for r in config['rollers']:
-			zaluzie.append(ShellyRollerController(r['name'], str(r['IP']), str(r['rollerUsername']), str(r['rollerPassword'])))
+			rollers.append(ShellyRollerController(r['name'], str(r['IP']), str(r['rollerUsername']), str(r['rollerPassword'])))
 	if "WeeWxGaugeFile" in config:
 		gaugeFile = assignValFromDict(config['WeeWxGaugeFile'],'location', gaugeFile)
 		sleepTime = assignValFromDict(config['WeeWxGaugeFile'],'readPeriodSecs', sleepTime)
 		historyLength = assignValFromDict(config['WeeWxGaugeFile'],'numberOfAvergagedReadings', historyLength)
 	if "location" in config:
-		latitude = assignValFromDict(config['location'],'latitude', latitude)
-		longitude = assignValFromDict(config['location'],'longitude', longitude)
-		city = assignValFromDict(config['location'],'city', "")
-		country = assignValFromDict(config['location'],'country', "")
-		timezone = assignValFromDict(config['location'],'timezone', "")
+		city.latitude = assignValFromDict(config['location'],'latitude', city.latitude)
+		city.longitude = assignValFromDict(config['location'],'longitude', city.longitude)
+		city.name = assignValFromDict(config['location'],'city', city.name)
+		city.country = assignValFromDict(config['location'],'region', city.region)
+		city.timezone = assignValFromDict(config['location'],'timezone', city.timezone)
+		city.elevation = assignValFromDict(config['location'],'elevation', city.elevation)
 
 
 if not os.path.isfile(gaugeFile):
@@ -238,11 +258,26 @@ wgustMonitor = SlidingMonitor();
 #astralCity.longitude = longitude
 #astralCity.city_name = city
 
+scheduler = BackgroundScheduler(daemon=True,timezone=config['location']['timezone'],job_defaults={'misfire_grace_time': 5*60})
+
+def getNextSunEvent(event):
+	assert isinstance(event, str)
+	sun = city.sun(date=datetime.date.today(), local=True)
+	if datetime.datetime.now() >= sun[event].replace(tzinfo=None):
+		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
+	return sun[event]
+
+def scheduleSunJob(job, event):
+	scheduler.add_job(lambda : (job, scheduler.add_job(job, trigger='date', next_run_time = str(getNextSunEvent(event)))), trigger='date', next_run_time = str(getNextSunEvent(event)))
+
 def main_code():
 	lastDate = ""
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
+	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=10)
+	scheduleSunJob(lambda : [r.setStateIfNotWindy(1) for r in rollers], 'dawn')
+	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
 		with open(gaugeFile) as gaugeFile_json:
@@ -278,22 +313,22 @@ def main_code():
 						log.info("Rising rollers")
 						wasOpened = True
 						datetimeLastChange = datetime.datetime.now()
-						for z in zaluzie:
-							z.submitRequest(ShellyRollerControllerRequest.OPEN)
+						for r in rollers:
+							r.submitRequest(ShellyRollerControllerRequest.OPEN)
 				# this is for cases where the rollers have been moved but should still be open because of the wind
 				else:
-					for z in zaluzie:
-						if z.getPos() != 100:
-							log.info("Re-rising roller " + z.getNameIP() + " - something has closed them in the meantime")
-							z.submitRequest(ShellyRollerControllerRequest.OPEN)
+					for r in rollers:
+						if r.getPos() != 100:
+							log.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
+							r.submitRequest(ShellyRollerControllerRequest.OPEN)
 			# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
 			elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
 				if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
 					log.info("Restoring rollers")
 					wasOpened = False
 					datetimeLastChange = datetime.datetime.now()
-					for z in zaluzie:
-						z.submitRequest(ShellyRollerControllerRequest.RESTORE)
+					for r in rollers:
+						r.submitRequest(ShellyRollerControllerRequest.RESTORE)
 		time.sleep(sleepTime)
 
 if args.nodaemon:
@@ -301,8 +336,9 @@ if args.nodaemon:
 		main_code()
 	except KeyboardInterrupt:
 		log.info("Terminating")
-		for z in zaluzie:
-			z.requestShutdown()
+		scheduler.shutdown(wait=True)
+		for r in rollers:
+			r.requestShutdown()
 		exit(0)
 else:
 	with daemon.DaemonContext():
