@@ -18,9 +18,13 @@ from statistics import mean
 from enum import Enum
 
 import threading
+import apscheduler
 
 import argparse
 import logging as log
+
+import astral
+
 
 class ExtendAction(argparse.Action):
 
@@ -45,29 +49,6 @@ elif args.verbose:
 else:
     log.basicConfig(format="%(levelname)s: %(message)s")
 
-class SlidingMonitor:
-
-	def __init__(self):
-		self.container = collections.deque(maxlen=historyLength)
-
-	def append(self, x):
-		assert(isinstance(x, float))
-		self.container.append(x)
-
-	def getAvg(self):
-		return mean(self.container)
-
-	def getMax(self):
-		return max(self.container)
-
-	def isFull(self):
-		if (len(self.container) == self.container.maxlen):
-			log.debug("Measurement queue is already filled with data")
-			return True
-		else:
-			log.debug("Measurement queue is not yet filled with data")
-			return False
-		
 class ShellyRollerControllerRequest(Enum):
 	RESTORE = 0
 	OPEN = 1
@@ -75,8 +56,8 @@ class ShellyRollerControllerRequest(Enum):
 class ShellyRollerController:
 
 	def __init__(self, name, IP, authUserName, authPassword):
-		assert(isinstance(authUserName, str))
-		assert(isinstance(authPassword, str))
+		assert isinstance(authUserName, str), "Expected string, got " + str(type(authUserName))
+		assert isinstance(authPassword, str), "Expected string, got " + str(type(authPassword))
 
 		self.requestQueue = collections.deque()
 		self.name = name
@@ -177,44 +158,85 @@ class ShellyRollerController:
 		# assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
 		self.requestQueue.append(request)
 
+avgWindThreshold = 40.0
+avgGustThreshold =  70.0
+timeOpenThresholdMinutes = 10
+timeRestoreThresholdMinutes = 30
+
+gaugeFile = '/tmp/gauge-data.txt'
+sleepTime =  60
+historyLength = 5
+
+latitude = 0.0
+longitude = 0.0
+city = ""
+country = ""
+timezone = ""
+
+zaluzie = collections.deque()
+
+with open(args.configFile) as configFile:
+	def assignValFromDict(d, k, default):
+			return d[k] if k in d else default
+
+	config = json.load(configFile)
+	if "thresholds" in config:
+		avgWindThreshold = assignValFromDict(config['thresholds'],'avgWindThreshold', avgWindThreshold)
+		avgGustThreshold = assignValFromDict(config['thresholds'],'avgGustThreshold', avgGustThreshold)
+		timeOpenThresholdMinutes = assignValFromDict(config['thresholds'],'timeOpenThresholdMinutes', timeOpenThresholdMinutes)
+		timeRestoreThresholdMinutes = assignValFromDict(config['thresholds'],'timeRestoreThresholdMinutes', timeRestoreThresholdMinutes)
+	if "rollers" in config:
+		for r in config['rollers']:
+			zaluzie.append(ShellyRollerController(r['name'], str(r['IP']), str(r['rollerUsername']), str(r['rollerPassword'])))
+	if "WeeWxGaugeFile" in config:
+		gaugeFile = assignValFromDict(config['WeeWxGaugeFile'],'location', gaugeFile)
+		sleepTime = assignValFromDict(config['WeeWxGaugeFile'],'readPeriodSecs', sleepTime)
+		historyLength = assignValFromDict(config['WeeWxGaugeFile'],'numberOfAvergagedReadings', historyLength)
+	if "location" in config:
+		latitude = assignValFromDict(config['location'],'latitude', latitude)
+		longitude = assignValFromDict(config['location'],'longitude', longitude)
+		city = assignValFromDict(config['location'],'city', "")
+		country = assignValFromDict(config['location'],'country', "")
+		timezone = assignValFromDict(config['location'],'timezone', "")
+
 
 if not os.path.isfile(gaugeFile):
 	print("Gauge file " + gaugeFile + " does not exist!")
 	exit(1)
 
+
+class SlidingMonitor:
+
+	def __init__(self):
+		self.container = collections.deque(maxlen=historyLength)
+
+	def append(self, x):
+		assert(isinstance(x, float))
+		self.container.append(x)
+
+	def getAvg(self):
+		return mean(self.container)
+
+	def getMax(self):
+		return max(self.container)
+
+	def isFull(self):
+		if (len(self.container) == self.container.maxlen):
+			log.debug("Measurement queue is already filled with data")
+			return True
+		else:
+			log.debug("Measurement queue is not yet filled with data")
+			return False
+		
 wlatestMonitor = SlidingMonitor();
 wgustMonitor = SlidingMonitor();
 
-gaugeFile = '/tmp/gauge-data.txt'
-historyLength = 1
-sleepTime = 60
-
-avgWindThreshold = 40.0
-avgGustThreshold = 70.0
-timeOpenThresholdMinutes = 1
-timeRestoreThresholdMinutes = 2
-
-zaluzie = collections.deque()
-
-with open(args.configFile) as configFile:
-	config = json.load(configFile)
-	if "thresholds" in config:
-		if "avgWindThreshold" in config['thresholds']:
-			avgWindThreshold = config['thresholds']['avgWindThreshold']
-		if "avgGustThreshold" in config['thresholds']:
-			avgGustThreshold = config['thresholds']['avgGustThreshold']
-		if "timeOpenThresholdMinutes" in config['thresholds']:
-			timeOpenThresholdMinutes = config['thresholds']['timeOpenThresholdMinutes']
-		if "timeRestoreThresholdMinutes" in config['thresholds']:
-			timeRestoreThresholdMinutes = config['thresholds']['timeRestoreThresholdMinutes']
-	if "rollers" in config:
-		for r in config['rollers']:
-			zaluzie.append(ShellyRollerController(r['name'], r['IP'], r['rollerUsername'], r['rollerPassword'])) 
-	if "WeeWxGaugeFile" in config:
-		if "location" in config['WeeWxGaugeFile']:
-			gaugeFile = config['WeeWxGaugeFile']['location']
-		if "readPeriodSecs" in config['WeeWxGaugeFile']:
-			sleepTime = config['WeeWxGaugeFile']['readPeriodSecs']
+#a = astral.Astral()
+#a.solar_depression = 'civil'
+#astralCity = a[astral.Astral.Configuration.City()]
+#astralCity.latitude = latitude
+#astralCity.longitude = longitude
+#astralCity.city_name = city
 
 def main_code():
 	lastDate = ""
@@ -222,6 +244,7 @@ def main_code():
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
 	while True:
+		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
 		with open(gaugeFile) as gaugeFile_json:
 			data = json.load(gaugeFile_json)
 			assert(data['windunit'] == 'km/h')

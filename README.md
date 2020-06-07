@@ -24,3 +24,4 @@ This is a simple tool to control the rollers based on current wind conditions, w
 
 * Rollers controlled by Shelly 2.5 (https://shelly.cloud/shelly-25-wifi-smart-relay-roller-shutter-home-automation/, configured in roller mode)
 * WH1080 weather station (https://www.hadex.cz/t104-meteostanice-wh1080/)
+* Small Raspberry Pi 3B+ with Volumio installed (used primarily as audio source ;) )

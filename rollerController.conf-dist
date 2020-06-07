@@ -10,12 +10,20 @@
    "WeeWxGaugeFile":{
       "location":"/tmp/gauge-data.txt",
       "readPeriodSecs":60
+      "numberOfAvergagedReadings":5
    },
    "thresholds":{
       "avgWindThreshold":4.9,
       "avgGustThreshold":70.0,
       "timeOpenThresholdMinutes":1,
       "timeRestoreThresholdMinutes":2
+   },
+   "location":{
+      "latitude":54.32,
+      "longitude":12.34,
+      "city":"City",
+      "country":"Country",
+      "timezone":"Europe/London"
    }
 }
 
