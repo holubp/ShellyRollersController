@@ -43,6 +43,7 @@ parser.register('action', 'extend', ExtendAction)
 parser.add_argument('-v', '--verbose', dest='verbose', action='store_true', help='verbose information on progress of the data checks')
 parser.add_argument('-d', '--debug', dest='debug', action='store_true', help='debug information on progress of the data checks')
 parser.add_argument('-n', '--no-daemon', dest='nodaemon', action='store_true', help='do not daemonize the process')
+parser.add_argument('-t', '--test-rollers', dest='testRollers', action='store_true', help='test movement of rollers')
 parser.add_argument('-c', '--config', dest='configFile', nargs=1, help='location of config file')
 parser.set_defaults(configFile = 'rollerController.conf')
 args = parser.parse_args()
@@ -124,7 +125,7 @@ class ShellyRollerController:
 		else:
 			if pos > 0 and pos <= 10:
 				# for correct tilt of roller one needs to shut them first and then open to the target
-				if int(state['current_pos']) < pos and str(state['last_direction']) == "open") and str(state['stop_reason']) == "normal" and state['is_valid']:
+				if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
 					log.debug("No need to prepare rollers by closing them first")
 				else:
 					log.debug("Preparing rollers by closing them first")
@@ -133,7 +134,7 @@ class ShellyRollerController:
 						log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
-			log.debug("Setting rollers to the desired state: " + pos)
+			log.debug("Setting rollers to the desired state: " + str(pos))
 			resp = requests.get(self.setPosURL() + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 			if resp.status_code != 200:
 				log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
@@ -309,12 +310,18 @@ def main_code():
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
-	# this is just a sample event for demo purposes
-	#scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], datetime.datetime.now() + datetime.timedelta(minutes=1))
+	if args.testRollers:
+		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
+		# this is to test movement of rollers
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(15)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=15))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
+	else:
+		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=60)
 	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
