@@ -304,7 +304,8 @@ def main_code():
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
-	scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], datetime.datetime.now() + datetime.timedelta(minutes=1))
+	# this is just a sample event for demo purposes
+	#scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], datetime.datetime.now() + datetime.timedelta(minutes=1))
 	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
