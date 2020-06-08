@@ -1,4 +1,5 @@
 #!/usr/bin/python
+# vim:ts=8:sw=8:tw=0:noet
 
 import requests
 from requests.auth import HTTPBasicAuth
@@ -291,15 +292,19 @@ def getNextSunEvent(event):
 def scheduleSunJob(job, event):
 	scheduler.add_job(lambda : (job, scheduler.add_job(job, trigger='date', next_run_time = str(getNextSunEvent(event)))), trigger='date', next_run_time = str(getNextSunEvent(event)))
 
+def scheduleDateJob(job, date):
+	scheduler.add_job(job, trigger='date', next_run_time = date)
+
 def main_code():
 	lastDate = ""
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=60)
-	scheduleSunJob(lambda : [r.setStateIfNotWindy(1) for r in rollers], 'dawn')
-	scheduleSunJob(lambda : [r.setStateIfNotWindy(2) for r in rollers], 'sunrise')
-	scheduleSunJob(lambda : [r.setStateIfNotWindy(0) for r in rollers], 'sunset')
+	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
+	scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], datetime.datetime.now() + datetime.timedelta(minutes=1))
 	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
@@ -337,13 +342,13 @@ def main_code():
 						wasOpened = True
 						datetimeLastChange = datetime.datetime.now()
 						for r in rollers:
-							r.submitRequest(ShellyRollerControllerRequest.OPEN)
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
 				# this is for cases where the rollers have been moved but should still be open because of the wind
 				else:
 					for r in rollers:
 						if r.getPos() != 100:
 							log.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
-							r.submitRequest(ShellyRollerControllerRequest.OPEN)
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
 			# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
 			elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
 				if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
@@ -351,7 +356,7 @@ def main_code():
 					wasOpened = False
 					datetimeLastChange = datetime.datetime.now()
 					for r in rollers:
-						r.submitRequest(ShellyRollerControllerRequest.RESTORE)
+						r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 		time.sleep(sleepTime)
 
 if args.nodaemon:
