@@ -4,8 +4,6 @@
 import requests
 from requests.auth import HTTPBasicAuth
 
-import daemon
-
 import pprint
 pp = pprint.PrettyPrinter(depth=3)
 
@@ -45,7 +43,9 @@ parser.add_argument('-d', '--debug', dest='debug', action='store_true', help='de
 parser.add_argument('-n', '--no-daemon', dest='nodaemon', action='store_true', help='do not daemonize the process')
 parser.add_argument('-t', '--test-rollers', dest='testRollers', action='store_true', help='test movement of rollers')
 parser.add_argument('-c', '--config', dest='configFile', nargs=1, help='location of config file')
-parser.set_defaults(configFile = 'rollerController.conf')
+parser.add_argument('-l', '--log', dest='logFile', nargs=1, help='location of log file')
+parser.add_argument('-p', '--pid', dest='pidFile', nargs=1, help='location of PID file')
+parser.set_defaults(configFile = 'rollerController.conf', logFile = None)
 args = parser.parse_args()
 
 if args.debug:
@@ -54,6 +54,11 @@ elif args.verbose:
 	log.basicConfig(format="%(levelname)s: %(message)s", level=log.INFO)
 else:
 	log.basicConfig(format="%(levelname)s: %(message)s")
+
+logger = log.getLogger()
+if args.logFile != None:
+	logFH = log.FileHandler(args.logFile[0])
+	logger.addHandler(logFH)
 
 class ShellyRollerControllerRequest:
 	def __init__(self):
@@ -94,7 +99,7 @@ class ShellyRollerController:
 
 		self.mainThread = threading.Thread(target=self.rollerMainThread)
 		self.mainThread.start()
-		log.info("Roller thread started for " + self.getNameIP())
+		logger.info("Roller thread started for " + self.getNameIP())
 
 	def getNameIP(self):
 		return str(self.name + '/' + self.IP)
@@ -102,7 +107,7 @@ class ShellyRollerController:
 	def getState(self):
 		resp = requests.get('http://' + self.IP + '/roller/0/state', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 		if resp.status_code != 200:
-			log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+			logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 		return(resp.json())
 	
 	def getStoppedState(self):
@@ -121,23 +126,23 @@ class ShellyRollerController:
 		assert(pos >= 0 and pos <= 100)
 		state = self.getStoppedState()
 		if int(state['current_pos']) == pos:
-			log.debug("Roller is already in the desired state")
+			logger.debug("Roller is already in the desired state")
 		else:
 			if pos > 0 and pos <= 10:
 				# for correct tilt of roller one needs to shut them first and then open to the target
 				if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
-					log.debug("No need to prepare rollers by closing them first")
+					logger.debug("No need to prepare rollers by closing them first")
 				else:
-					log.debug("Preparing rollers by closing them first")
+					logger.debug("Preparing rollers by closing them first")
 					resp = requests.get(self.setPosURL() + '0', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 					if resp.status_code != 200:
-						log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+						logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
-			log.debug("Setting rollers to the desired state: " + str(pos))
+			logger.debug("Setting rollers to the desired state: " + str(pos))
 			resp = requests.get(self.setPosURL() + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 			if resp.status_code != 200:
-				log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 			self.waitUntilStopGetState()
 
 	# this is for the scheduled events to minimize interference
@@ -153,7 +158,7 @@ class ShellyRollerController:
 	def requestShutdown(self):
 		self.shutdownRequested = True
 		self.mainThread.join()
-		log.info("Roller thread stopped for " + self.getNameIP())
+		logger.info("Roller thread stopped for " + self.getNameIP())
 
 	def rollerMainThread(self):
 		while not self.shutdownRequested:
@@ -167,11 +172,11 @@ class ShellyRollerController:
 					elif(request.action == ShellyRollerControllerRequest.RESTORE):
 						self.restoreState()
 					else:
-						log.error('Got unknown wind request: ' + str(request))
+						logger.error('Got unknown wind request: ' + str(request))
 				elif isinstance(request, ShellyRollerControllerRequestEvent):
 					self.setState(request.targetPos)
 				else:
-					log.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
+					logger.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
 			except IndexError as i:
 				pass
 			time.sleep(1)
@@ -197,7 +202,7 @@ class ShellyRollerController:
 				self.setState(self.savedState['current_pos'])
 				self.savedState = None
 			else:
-			 	log.info("Not restoring the state as the roller was moved in the meantime - expected open (100) state, got " + int(currentState['current_pos']))
+			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected open (100) state, got " + int(currentState['current_pos']))
 
 	def submitRequest(self, request):
 		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
@@ -274,10 +279,10 @@ class SlidingMonitor:
 
 	def isFull(self):
 		if (len(self.container) == self.container.maxlen):
-			log.debug("Measurement queue is already filled with data")
+			logger.debug("Measurement queue is already filled with data")
 			return True
 		else:
-			log.debug("Measurement queue is not yet filled with data")
+			logger.debug("Measurement queue is not yet filled with data")
 			return False
 		
 wlatestMonitor = SlidingMonitor();
@@ -328,22 +333,22 @@ def main_code():
 		with open(gaugeFile) as gaugeFile_json:
 			data = json.load(gaugeFile_json)
 			assert(data['windunit'] == 'km/h')
-			log.debug("Storing wlatest " + data['wlatest'])
+			logger.debug("Storing wlatest " + data['wlatest'])
 			wlatestMonitor.append(float(data['wlatest']))
-			log.debug("Storing wgust " + data['wgust'])
+			logger.debug("Storing wgust " + data['wgust'])
 			wgustMonitor.append(float(data['wgust']))
 			if(float(data['wlatest']) > float(data['wgust'])):
-				log.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
+				logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
 			if(lastDate != "" and lastDate == data['date']):
-				log.warn("Unexpected situation: gauge hasn't been updated during the last readout period")
+				logger.warn("Unexpected situation: gauge hasn't been updated during the last readout period")
 			else:
 				lastDate = data['date']
 				try:
 					lastDateNumeric  = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
-					log.debug("Last date numeric is " + str(lastDateNumeric))
+					logger.debug("Last date numeric is " + str(lastDateNumeric))
 				except Exception as e:
-					log.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
-		log.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
+					logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
+		logger.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
 
 		# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
 		if(wlatestMonitor.isFull()):
@@ -355,7 +360,7 @@ def main_code():
 				if not wasOpened:
 					# this is safety so that we don't open the rollers too often
 					if timeDiffMinutes >= timeOpenThresholdMinutes:
-						log.info("Rising rollers")
+						logger.info("Rising rollers")
 						wasOpened = True
 						datetimeLastChange = datetime.datetime.now()
 						for r in rollers:
@@ -364,12 +369,12 @@ def main_code():
 				else:
 					for r in rollers:
 						if r.getPos() != 100:
-							log.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
+							logger.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
 							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
 			# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
 			elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
 				if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
-					log.info("Restoring rollers")
+					logger.info("Restoring rollers")
 					wasOpened = False
 					datetimeLastChange = datetime.datetime.now()
 					for r in rollers:
@@ -380,12 +385,16 @@ if args.nodaemon:
 	try:
 		main_code()
 	except KeyboardInterrupt:
-		log.info("Terminating")
+		logger.info("Terminating")
 		scheduler.shutdown(wait=True)
 		for r in rollers:
 			r.requestShutdown()
 		exit(0)
 else:
-	with daemon.DaemonContext():
-		main_code()
+	import daemon
 
+	with daemon.DaemonContext(
+			files_preserve = [
+			      logFH.stream,
+		],):
+		main_code()
