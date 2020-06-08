@@ -329,7 +329,7 @@ def main_code():
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
 	else:
-		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=60)
+		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=300)
 	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
@@ -384,16 +384,21 @@ def main_code():
 						r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 		time.sleep(sleepTime)
 
+def stopAll(signum, frame):
+	logger.info("Terminating")
+	scheduler.shutdown(wait=True)
+	for r in rollers:
+		r.requestShutdown()
+
+
 if args.nodaemon:
 	try:
 		main_code()
 	except KeyboardInterrupt:
-		logger.info("Terminating")
-		scheduler.shutdown(wait=True)
-		for r in rollers:
-			r.requestShutdown()
+		stopAll(0,None)
 		exit(0)
 else:
 	from daemonize import Daemonize
 	daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
+	daemon.sigterm = stopAll
 	daemon.start()
