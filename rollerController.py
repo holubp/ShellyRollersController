@@ -32,10 +32,10 @@ from astral import Astral, Location
 
 class ExtendAction(argparse.Action):
 
-    def __call__(self, parser, namespace, values, option_string=None):
-        items = getattr(namespace, self.dest) or []
-        items.extend(values)
-        setattr(namespace, self.dest, items)
+	def __call__(self, parser, namespace, values, option_string=None):
+		items = getattr(namespace, self.dest) or []
+		items.extend(values)
+		setattr(namespace, self.dest, items)
 
 parser = argparse.ArgumentParser()
 parser.register('action', 'extend', ExtendAction)
@@ -47,15 +47,30 @@ parser.set_defaults(configFile = 'rollerController.conf')
 args = parser.parse_args()
 
 if args.debug:
-    log.basicConfig(format="%(levelname)s: %(message)s", level=log.DEBUG)
+	log.basicConfig(format="%(levelname)s: %(message)s", level=log.DEBUG)
 elif args.verbose:
-    log.basicConfig(format="%(levelname)s: %(message)s", level=log.INFO)
+	log.basicConfig(format="%(levelname)s: %(message)s", level=log.INFO)
 else:
-    log.basicConfig(format="%(levelname)s: %(message)s")
+	log.basicConfig(format="%(levelname)s: %(message)s")
 
-class ShellyRollerControllerRequest(Enum):
+class ShellyRollerControllerRequest:
+	def __init__(self):
+		pass
+
+class ShellyRollerControllerRequestEvent (ShellyRollerControllerRequest):
+	def __init__(self, targetPos):
+		assert(isinstance(targetPos, int))
+		assert(targetPos >= 0 and targetPos <= 100)
+		self.targetPos = targetPos
+
+class ShellyRollerControllerRequestWindType(Enum):
 	RESTORE = 0
 	OPEN = 1
+
+class ShellyRollerControllerRequestWind (ShellyRollerControllerRequest):
+	def __init__(self, action):
+		assert isinstance(action, ShellyRollerControllerRequestWindType)
+		self.action = action
 
 class ShellyRollerController:
 
@@ -133,13 +148,19 @@ class ShellyRollerController:
 		while not self.shutdownRequested:
 			try:
 				request = self.requestQueue.popleft()
-				if(request == ShellyRollerControllerRequest.OPEN):
-					self.saveState()
-					self.setState(100)
-				elif(request == ShellyRollerControllerRequest.RESTORE):
-					self.restoreState()
+				assert(isinstance(request, ShellyRollerControllerRequest))
+				if isinstance(request, ShellyRollerControllerRequestWind):
+					if(request.action == ShellyRollerControllerRequest.OPEN):
+						self.saveState()
+						self.setState(100)
+					elif(request.action == ShellyRollerControllerRequest.RESTORE):
+						self.restoreState()
+					else:
+						log.error('Got unknown wind request: ' + str(request))
+				elif isinstance(request, ShellyRollerControllerRequestEvent):
+					self.setState(request.targetPos)
 				else:
-					log.error('Got unknown request: ' + str(request))
+					log.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
 			except IndexError as i:
 				pass
 			time.sleep(1)
@@ -168,7 +189,7 @@ class ShellyRollerController:
 			 	log.info("Not restoring the state as the roller was moved in the meantime - expected open (100) state, got " + int(currentState['current_pos']))
 
 	def submitRequest(self, request):
-		# assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
+		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
 		self.requestQueue.append(request)
 
 avgWindThreshold = 40.0
@@ -275,8 +296,10 @@ def main_code():
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=10)
+	scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=60)
 	scheduleSunJob(lambda : [r.setStateIfNotWindy(1) for r in rollers], 'dawn')
+	scheduleSunJob(lambda : [r.setStateIfNotWindy(2) for r in rollers], 'sunrise')
+	scheduleSunJob(lambda : [r.setStateIfNotWindy(0) for r in rollers], 'sunset')
 	scheduler.start()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
