@@ -104,31 +104,40 @@ class ShellyRollerController:
 			log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 		return(resp.json())
 	
-	def getPos(self):
+	def getStoppedState(self):
 		state = self.waitUntilStopGetState()
+		return state
+
+	def getPos(self):
+		state = self.getStoppedState()
 		return int(state['current_pos'])
 
+	def setPosURL(self):
+		return 'http://' + self.IP + '/roller/0?go=to_pos&roller_pos=' 
 
 	def setState(self, pos):
 		assert(isinstance(pos, int))
 		assert(pos >= 0 and pos <= 100)
-		if pos == 100:
-			resp = requests.get('http://' + self.IP + '/roller/0?go=to_pos&roller_pos=' + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
-			if resp.status_code != 200:
-				log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
-			self.waitUntilStopGetState()
-
+		state = self.getStoppedState()
+		if int(state['current_pos']) == pos:
+			log.debug("Roller is already in the desired state")
 		else:
-			# for correct tilt of roller one needs to shut them first and then open to the target
-			resp = requests.get('http://' + self.IP + '/roller/0?go=to_pos&roller_pos=0', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+			if pos > 0 and pos <= 10:
+				# for correct tilt of roller one needs to shut them first and then open to the target
+				if int(state['current_pos']) < pos and str(state['last_direction']) == "open") and str(state['stop_reason']) == "normal" and state['is_valid']:
+					log.debug("No need to prepare rollers by closing them first")
+				else:
+					log.debug("Preparing rollers by closing them first")
+					resp = requests.get(self.setPosURL() + '0', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+					if resp.status_code != 200:
+						log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+					self.waitUntilStopGetState()
+			# now we can always set the desired state
+			log.debug("Setting rollers to the desired state: " + pos)
+			resp = requests.get(self.setPosURL() + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 			if resp.status_code != 200:
 				log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 			self.waitUntilStopGetState()
-			if pos > 0:
-				resp = requests.get('http://' + self.IP + '/roller/0?go=to_pos&roller_pos=' + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
-				if resp.status_code != 200:
-					log.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
-				self.waitUntilStopGetState()
 
 	# this is for the scheduled events to minimize interference
 	def setStateIfNotWindy(self, pos):
@@ -170,7 +179,7 @@ class ShellyRollerController:
 		while True:
 			time.sleep(1)
 			state = self.getState()
-			if(state['is_valid'] == True and state['state'] == 'stop'):
+			if(state['is_valid'] == True and not state['calibrating'] and state['state'] == 'stop'):
 				return state
 
 	def saveState(self):
