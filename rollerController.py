@@ -398,7 +398,16 @@ if args.nodaemon:
 		stopAll(0,None)
 		exit(0)
 else:
-	from daemonize import Daemonize
-	daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
-	daemon.sigterm = stopAll
-	daemon.start()
+	#from daemonize import Daemonize
+	#daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
+	#daemon.sigterm = stopAll
+	#daemon.start()
+	import daemon
+	import signal
+	import lockfile
+	with daemon.DaemonContext(
+			files_preserve=[ logFH.stream ],
+			pidfile=lockfile.FileLock(pidFile),
+			signal_map = {signal.SIGTERM : stopAll},
+		):
+		main_code()
