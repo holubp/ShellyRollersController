@@ -45,7 +45,7 @@ parser.add_argument('-t', '--test-rollers', dest='testRollers', action='store_tr
 parser.add_argument('-c', '--config', dest='configFile', nargs=1, help='location of config file')
 parser.add_argument('-l', '--log', dest='logFile', nargs=1, help='location of log file')
 parser.add_argument('-p', '--pid', dest='pidFile', nargs=1, help='location of PID file')
-parser.set_defaults(configFile = 'rollerController.conf', logFile = None)
+parser.set_defaults(configFile = 'rollerController.conf', logFile = None, pidFile = None)
 args = parser.parse_args()
 
 if args.debug:
@@ -59,6 +59,9 @@ logger = log.getLogger()
 if args.logFile != None:
 	logFH = log.FileHandler(args.logFile[0])
 	logger.addHandler(logFH)
+
+if args.pidFile != None:
+	pidFile = args.pidFile[0]
 
 class ShellyRollerControllerRequest:
 	def __init__(self):
@@ -391,10 +394,6 @@ if args.nodaemon:
 			r.requestShutdown()
 		exit(0)
 else:
-	import daemon
-
-	with daemon.DaemonContext(
-			files_preserve = [
-			      logFH.stream,
-		],):
-		main_code()
+	from daemonize import Daemonize
+	daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
+	daemon.start()
