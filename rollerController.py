@@ -209,6 +209,7 @@ class ShellyRollerController:
 
 	def submitRequest(self, request):
 		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
+		log.debug("Roller " + str(self) + ": submitting request " + str(request))
 		self.requestQueue.append(request)
 
 avgWindThreshold = 40.0
@@ -300,15 +301,39 @@ wgustMonitor = SlidingMonitor();
 
 scheduler = BackgroundScheduler(daemon=True,timezone=config['location']['timezone'],job_defaults={'misfire_grace_time': 5*60})
 
-def getNextSunEvent(event):
+def getNextSunEvent(event, offsetSeconds = None):
 	assert isinstance(event, str)
+	assert offsetSeconds == None or isinstance(offsetSeconds, int)
 	sun = city.sun(date=datetime.date.today(), local=True)
-	if datetime.datetime.now() >= sun[event].replace(tzinfo=None):
+	sunEvent = sun[event].replace(tzinfo=None)
+	log.debug(str(sunEvent))
+	if offsetSeconds != None:
+		sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
+		log.debug(str(sunEvent))
+	if datetime.datetime.now() >= sunEvent:
 		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
-	return sun[event]
+		sunEvent = sun[event].replace(tzinfo=None)
+		if offsetSeconds != None:
+			sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
+	return sunEvent
 
-def scheduleSunJob(job, event):
-	scheduler.add_job(lambda : (job, scheduler.add_job(job, trigger='date', next_run_time = str(getNextSunEvent(event)))), trigger='date', next_run_time = str(getNextSunEvent(event)))
+class SunJob:
+
+	def __init__(self, job, event, offsetSeconds = None):
+		self.job = job
+		self.event = event
+		self.offsetSeconds = offsetSeconds
+
+sunJobs = []
+
+def scheduleSunJobs():
+	for job in sunJobs:
+		log.debug("Scheduling " + str(job))
+		scheduler.add_job(job.job, trigger='date', next_run_time = str(getNextSunEvent(job.event, job.offsetSeconds)))
+
+def registerSunJob(job, event, offsetSeconds = None):
+	sunJob = SunJob(job, event, offsetSeconds)
+	sunJobs.append(sunJob)
 
 def scheduleDateJob(job, date):
 	scheduler.add_job(job, trigger='date', next_run_time = date)
@@ -318,9 +343,11 @@ def main_code():
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
+	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
+	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
+	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
+	scheduler.add_job(scheduleSunJobs, trigger='interval', hours=24, start_date=datetime.datetime.now()+datetime.timedelta(seconds=5))
+
 	if args.testRollers:
 		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
 		# this is to test movement of rollers
@@ -328,9 +355,13 @@ def main_code():
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
+	elif args.debug:
+		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=30)
 	else:
 		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=300)
+
 	scheduler.start()
+	scheduler.print_jobs()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
 		with open(gaugeFile) as gaugeFile_json:

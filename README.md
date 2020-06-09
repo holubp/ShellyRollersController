@@ -2,6 +2,8 @@
 
 This is a simple tool to control the rollers based on current wind conditions, with the intention to allow very cheap automated control system. It uses Shelly 2.5 roller controller and WeeWx-based weather station (currently I am using WH1080). It is not meant at the moment as a generic solution but as a quick tool I needed for my own home and that somebody may use as an inspiration to write something more elaborate.
 
+While more complex systematic solutions exists (such as home-assistant.io), this aims to be as lightweight as possible, running even on limited Volumio Raspberry Pi with old Python 2.7.
+
 ## Prerequisites
 
 * WeeWx
