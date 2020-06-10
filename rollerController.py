@@ -136,13 +136,13 @@ class ShellyRollerController:
 				if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
 					logger.debug("No need to prepare rollers by closing them first")
 				else:
-					logger.debug("Preparing rollers by closing them first")
+					logger.info("Preparing rollers by closing them first")
 					resp = requests.get(self.setPosURL() + '0', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 					if resp.status_code != 200:
 						logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
-			logger.debug("Setting rollers to the desired state: " + str(pos))
+			logger.info("Setting rollers to the desired state: " + str(pos))
 			resp = requests.get(self.setPosURL() + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 			if resp.status_code != 200:
 				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
@@ -343,8 +343,8 @@ def main_code():
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], 'dawn')
-	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'sunrise')
+	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
+	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
 	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
 	scheduler.add_job(scheduleSunJobs, trigger='interval', hours=24, start_date=datetime.datetime.now()+datetime.timedelta(seconds=5))
 
