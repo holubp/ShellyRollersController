@@ -107,8 +107,14 @@ class ShellyRollerController:
 	def getNameIP(self):
 		return str(self.name + '/' + self.IP)
 
+	def getHTTPResp(self, urlPath):
+		assert isinstance(urlPath, str)
+		resp = requests.get('http://' + self.IP + urlPath, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+		# TODO: implement exception logic and retries
+		return resp
+
 	def getState(self):
-		resp = requests.get('http://' + self.IP + '/roller/0/state', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+		resp = self.getHTTPResp('/roller/0/state')
 		if resp.status_code != 200:
 			logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 		return(resp.json())
@@ -122,12 +128,13 @@ class ShellyRollerController:
 		return int(state['current_pos'])
 
 	def setPosURL(self):
-		return 'http://' + self.IP + '/roller/0?go=to_pos&roller_pos=' 
+		return '/roller/0?go=to_pos&roller_pos=' 
 
-	def setState(self, pos):
+	def setPos(self, pos):
 		assert(isinstance(pos, int))
 		assert(pos >= 0 and pos <= 100)
 		state = self.getStoppedState()
+		logger.info("Processing request to set rollers to the desired state: " + str(pos))
 		if int(state['current_pos']) == pos:
 			logger.debug("Roller is already in the desired state")
 		else:
@@ -137,23 +144,23 @@ class ShellyRollerController:
 					logger.debug("No need to prepare rollers by closing them first")
 				else:
 					logger.info("Preparing rollers by closing them first")
-					resp = requests.get(self.setPosURL() + '0', auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+					resp = self.getHTTPResp(self.setPosURL() + '0')
 					if resp.status_code != 200:
 						logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
 			logger.info("Setting rollers to the desired state: " + str(pos))
-			resp = requests.get(self.setPosURL() + str(pos), auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+			resp = self.getHTTPResp(self.setPosURL() + str(pos))
 			if resp.status_code != 200:
 				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 			self.waitUntilStopGetState()
 
 	# this is for the scheduled events to minimize interference
-	def setStateIfNotWindy(self, pos):
+	def setPosIfNotWindy(self, pos):
 		assert(isinstance(pos, int))
 		assert(pos >= 0 and pos <= 100)
 		if(self.savedState != None):
-			self.setState(pos)
+			self.setPos(pos)
 		else:
 			# if the roller is up due to the wind, we set the restore position instead
 			self.savedState = pos
@@ -171,13 +178,13 @@ class ShellyRollerController:
 				if isinstance(request, ShellyRollerControllerRequestWind):
 					if(request.action == ShellyRollerControllerRequest.OPEN):
 						self.saveState()
-						self.setState(100)
+						self.setPos(100)
 					elif(request.action == ShellyRollerControllerRequest.RESTORE):
 						self.restoreState()
 					else:
 						logger.error('Got unknown wind request: ' + str(request))
 				elif isinstance(request, ShellyRollerControllerRequestEvent):
-					self.setState(request.targetPos)
+					self.setPos(request.targetPos)
 				else:
 					logger.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
 			except IndexError as i:
@@ -202,7 +209,7 @@ class ShellyRollerController:
 		if(self.savedState != None):
 			currentState = self.getState()
 			if(int(currentState['current_pos']) == 100):
-				self.setState(self.savedState['current_pos'])
+				self.setPos(self.savedState['current_pos'])
 				self.savedState = None
 			else:
 			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected open (100) state, got " + int(currentState['current_pos']))

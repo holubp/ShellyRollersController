@@ -9,7 +9,7 @@
    ],
    "WeeWxGaugeFile":{
       "location":"/tmp/gauge-data.txt",
-      "readPeriodSecs":60
+      "readPeriodSecs":90
       "numberOfAvergagedReadings":5
    },
    "thresholds":{
