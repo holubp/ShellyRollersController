@@ -25,6 +25,7 @@ from apscheduler.executors.pool import ThreadPoolExecutor, ProcessPoolExecutor
 executors = {
     'default': ThreadPoolExecutor(1),
 }
+import apscheduler.events
 
 import argparse
 
@@ -397,28 +398,48 @@ class SunJob:
 		self.offsetSeconds = offsetSeconds
 
 sunJobs = []
+sunJobsIds = []
 
-def scheduleSunJobs():
-	for job in sunJobs:
-		logger.debug("Scheduling " + str(job))
-		scheduler.add_job(job.job, trigger='date', next_run_time = str(getNextSunEvent(job.event, job.offsetSeconds)))
+def schedulerSunJobAdd(sunJob):
+	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, sunJob.offsetSeconds)))
 
-def registerSunJob(job, event, offsetSeconds = None):
+def scheduleSunJob(job, event, offsetSeconds = None):
 	sunJob = SunJob(job, event, offsetSeconds)
 	sunJobs.append(sunJob)
+	job = schedulerSunJobAdd(sunJob)
+	sunJobsIds.append(job.id)
+
+def rescheduleSunJobs(event):
+	"""
+	This method is a listener to each job termination -- checks if it is one of the sunJobs and if so, reschedules it.
+	"""
+	jobId = scheduler.get_job(event.job_id)
+	if event.exception:
+	        logger.warn("Job " + str(jobId) + " failed")
+	else:
+		if jobId in sunJobsIds:
+			sunJobIdx = sunJobsIds.index(jobId)
+			sunJob = sunJobs[sunJobIdx]
+			logger.debug("Rescheduling " + str(sunJob))
+			job = schedulerSunJobAdd(sunJob)
+			sunJobIds[sunJobIdx] = job.id
 
 def scheduleDateJob(job, date):
 	scheduler.add_job(job, trigger='date', next_run_time = date)
+
+		
 
 def main_code():
 	lastDate = ""
 	lastDateNumeric = 0
 	wasOpened = False
 	datetimeLastChange = datetime.datetime.now()
-	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
-	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
-	registerSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
-	scheduler.add_job(scheduleSunJobs, trigger='interval', hours=24, start_date=datetime.datetime.now()+datetime.timedelta(seconds=5))
+
+	scheduler.add_listener(rescheduleSunJobs, apscheduler.events.EVENT_JOB_EXECUTED | apscheduler.events.EVENT_JOB_ERROR)
+
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
 
 	if args.testRollers:
 		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
