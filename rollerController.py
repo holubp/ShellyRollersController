@@ -84,6 +84,9 @@ if args.debug:
 elif args.verbose:
 	logLevel=log.INFO
 
+log.getLogger('apscheduler').setLevel(log.WARN)
+log.getLogger('urllib3.connectionpool').setLevel(log.WARN)
+
 logHandlers = []
 
 if args.logFile != None:
@@ -170,13 +173,13 @@ class ShellyRollerController:
 				try:
 					connectionTry += 1
 					time.sleep((connectionTry-1)*connectionsRetryTimeStepSecs)
-					log.debug("Connecting (try " + str(connectionTry) + ") to " + self.getNameIP() + ": " + targetUrl)
+					logger.debug("Connecting (try " + str(connectionTry) + ") to " + self.getNameIP() + ": " + targetUrl)
 					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 					break
 				except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
-					log.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
+					logger.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
 		except requests.exceptions.RequestException as e:
-			log.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
+			logger.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
 		return resp
 
 	def getState(self):
@@ -427,7 +430,8 @@ def rescheduleSunJobs(event):
 def scheduleDateJob(job, date):
 	scheduler.add_job(job, trigger='date', next_run_time = date)
 
-		
+def logScheduledJobs():
+	logger.debug("Scheduled jobs\n" + "\n".join([ "name=" + str(j.name) + ' next_run_time=' + str(j.next_run_time.strftime("%Y-%m-%d %H:%M:%S %Z")) for j in scheduler.get_jobs()]))
 
 def main_code():
 	lastDate = ""
@@ -442,19 +446,19 @@ def main_code():
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
 
 	if args.testRollers:
-		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=5)
+		scheduler.add_job(logScheduledJobs,'interval',seconds=5)
 		# this is to test movement of rollers
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(15)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=15))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
 	elif args.debug:
-		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=30)
+		scheduler.add_job(logScheduledJobs,'interval',seconds=30)
 	else:
-		scheduler.add_job(lambda : scheduler.print_jobs(),'interval',seconds=300)
+		scheduler.add_job(logScheduledJobs,'interval',seconds=300)
 
 	scheduler.start()
-	scheduler.print_jobs()
+	logScheduledJobs()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
 		try:
@@ -508,7 +512,7 @@ def main_code():
 						for r in rollers:
 							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 		except e:
-			log.error("Unexpected error happened when processing WeeWx data: " + str(e))
+			logger.error("Unexpected error happened when processing WeeWx data: " + str(e))
 
 		time.sleep(sleepTime)
 
