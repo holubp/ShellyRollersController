@@ -377,37 +377,50 @@ wgustMonitor = SlidingMonitor();
 
 scheduler = BackgroundScheduler(daemon=True,timezone=config['location']['timezone'],job_defaults={'misfire_grace_time': 5*60})
 
-def getNextSunEvent(event, offsetSeconds = None):
+def getNextSunEvent(event, offsetSeconds = None, minTime = None, maxTime = None):
 	assert isinstance(event, str)
 	assert offsetSeconds == None or isinstance(offsetSeconds, int)
+	assert minTime == None or isinstance(minTime, datetime.time)
+	assert maxTime == None or isinstance(maxTime, datetime.time)
 	sun = city.sun(date=datetime.date.today(), local=True)
 	sunEvent = sun[event].replace(tzinfo=None)
-	logger.debug(str(sunEvent))
 	if offsetSeconds != None:
 		sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
-		logger.debug(str(sunEvent))
 	if datetime.datetime.now() >= sunEvent:
 		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
 		sunEvent = sun[event].replace(tzinfo=None)
 		if offsetSeconds != None:
 			sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
+	#log.debug('sunEvent="' + str(sunEvent) + '" minTime="' + str(minTime) + '" maxTime= "' + str(maxTime) + '"')
+	if minTime != None and sunEvent.time() < minTime:
+		sunEvent = sunEvent.replace(hour=minTime.hour, minute=minTime.minute, second=minTime.second)
+	if maxTime != None and sunEvent.time() > maxTime:
+		sunEvent = sunEvent.replace(hour=maxTime.hour, minute=maxTime.minute, second=maxTime.second)
 	return sunEvent
 
 class SunJob:
 
-	def __init__(self, job, event, offsetSeconds = None):
+	def __init__(self, job, event, offsetSeconds = None, minTime = None, maxTime = None):
+		assert offsetSeconds == None or isinstance(offsetSeconds, int)
+		assert minTime == None or isinstance(minTime, datetime.time)
+		assert maxTime == None or isinstance(maxTime, datetime.time)
 		self.job = job
 		self.event = event
 		self.offsetSeconds = offsetSeconds
+		self.minTime = minTime
+		self.maxTime = maxTime
 
 sunJobs = []
 sunJobsIds = []
 
 def schedulerSunJobAdd(sunJob):
-	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, sunJob.offsetSeconds)))
+	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime)))
 
-def scheduleSunJob(job, event, offsetSeconds = None):
-	sunJob = SunJob(job, event, offsetSeconds)
+def scheduleSunJob(job, event, offsetSeconds = None, minTime = None, maxTime = None):
+	assert offsetSeconds == None or isinstance(offsetSeconds, int)
+	assert minTime == None or isinstance(minTime, datetime.time)
+	assert maxTime == None or isinstance(maxTime, datetime.time)
+	sunJob = SunJob(job, event, offsetSeconds = offsetSeconds, minTime = minTime, maxTime = maxTime)
 	sunJobs.append(sunJob)
 	job = schedulerSunJobAdd(sunJob)
 	sunJobsIds.append(job.id)
@@ -444,7 +457,7 @@ def main_code():
 
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', -12500)
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
 
 	if args.testRollers:
