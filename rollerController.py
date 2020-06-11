@@ -173,7 +173,7 @@ class ShellyRollerController:
 				try:
 					connectionTry += 1
 					time.sleep((connectionTry-1)*connectionsRetryTimeStepSecs)
-					logger.debug("Connecting (try " + str(connectionTry) + ") to " + self.getNameIP() + ": " + targetUrl)
+					logger.debug("Connecting to " + self.getNameIP() + " (try " + str(connectionTry) + "): " + targetUrl)
 					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 					break
 				except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
@@ -416,16 +416,17 @@ def rescheduleSunJobs(event):
 	"""
 	This method is a listener to each job termination -- checks if it is one of the sunJobs and if so, reschedules it.
 	"""
-	jobId = scheduler.get_job(event.job_id)
+	jobId = event.job_id
 	if event.exception:
 	        logger.warn("Job " + str(jobId) + " failed")
 	else:
+		logger.debug("Checking if to reschedule job " + str(jobId))
 		if jobId in sunJobsIds:
 			sunJobIdx = sunJobsIds.index(jobId)
 			sunJob = sunJobs[sunJobIdx]
 			logger.debug("Rescheduling " + str(sunJob))
 			job = schedulerSunJobAdd(sunJob)
-			sunJobIds[sunJobIdx] = job.id
+			sunJobsIds[sunJobIdx] = job.id
 
 def scheduleDateJob(job, date):
 	scheduler.add_job(job, trigger='date', next_run_time = date)
@@ -443,6 +444,7 @@ def main_code():
 
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', -12500)
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
 
 	if args.testRollers:
