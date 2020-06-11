@@ -5,6 +5,7 @@ import requests
 from requests.auth import HTTPBasicAuth
 import requests.exceptions
 connectionsMaxRetries = 10
+connectionsRetryTimeStepSecs = 1
 
 import pprint
 pp = pprint.PrettyPrinter(depth=3)
@@ -167,6 +168,7 @@ class ShellyRollerController:
 			while connectionTry < connectionsMaxRetries:
 				try:
 					connectionTry += 1
+					time.sleep((connectionTry-1)*connectionsRetryTimeStepSecs)
 					log.debug("Connecting (try " + str(connectionTry) + ") to " + self.getNameIP() + ": " + targetUrl)
 					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 					break
@@ -434,55 +436,59 @@ def main_code():
 	scheduler.print_jobs()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
-		with open(gaugeFile) as gaugeFile_json:
-			data = json.load(gaugeFile_json)
-			assert(data['windunit'] == 'km/h')
-			logger.debug("Storing wlatest " + data['wlatest'])
-			wlatestMonitor.append(float(data['wlatest']))
-			logger.debug("Storing wgust " + data['wgust'])
-			wgustMonitor.append(float(data['wgust']))
-			if(float(data['wlatest']) > float(data['wgust'])):
-				logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
-			if(lastDate != "" and lastDate == data['date']):
-				logger.warn("Unexpected situation: gauge hasn't been updated during the last readout period")
-			else:
-				lastDate = data['date']
-				try:
-					lastDateNumeric  = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
-					logger.debug("Last date numeric is " + str(lastDateNumeric))
-				except Exception as e:
-					logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
-		logger.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
+		try:
+			with open(gaugeFile) as gaugeFile_json:
+				data = json.load(gaugeFile_json)
+				assert(data['windunit'] == 'km/h')
+				logger.debug("Storing wlatest " + data['wlatest'])
+				wlatestMonitor.append(float(data['wlatest']))
+				logger.debug("Storing wgust " + data['wgust'])
+				wgustMonitor.append(float(data['wgust']))
+				if(float(data['wlatest']) > float(data['wgust'])):
+					logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
+				if(lastDate != "" and lastDate == data['date']):
+					logger.warn("Unexpected situation: gauge hasn't been updated during the last readout period")
+				else:
+					lastDate = data['date']
+					try:
+						lastDateNumeric  = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
+						logger.debug("Last date numeric is " + str(lastDateNumeric))
+					except Exception as e:
+						logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
+			logger.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
 
-		# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
-		if(wlatestMonitor.isFull()):
-			datetimeNow = datetime.datetime.now()
-			timeDiff = datetimeNow - datetimeLastChange
-			timeDiffMinutes = int(timeDiff.total_seconds() / 60.0)
-			if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold:
-				# this is normal condition to raise the rollers
-				if not wasOpened:
-					# this is safety so that we don't open the rollers too often
-					if timeDiffMinutes >= timeOpenThresholdMinutes:
-						logger.info("Rising rollers")
-						wasOpened = True
+			# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
+			if(wlatestMonitor.isFull()):
+				datetimeNow = datetime.datetime.now()
+				timeDiff = datetimeNow - datetimeLastChange
+				timeDiffMinutes = int(timeDiff.total_seconds() / 60.0)
+				if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold:
+					# this is normal condition to raise the rollers
+					if not wasOpened:
+						# this is safety so that we don't open the rollers too often
+						if timeDiffMinutes >= timeOpenThresholdMinutes:
+							logger.info("Rising rollers")
+							wasOpened = True
+							datetimeLastChange = datetime.datetime.now()
+							for r in rollers:
+								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
+					# this is for cases where the rollers have been moved but should still be open because of the wind
+					else:
+						for r in rollers:
+							if r.getPos() != 100:
+								logger.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
+								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
+				# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
+				elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
+					if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
+						logger.info("Restoring rollers")
+						wasOpened = False
 						datetimeLastChange = datetime.datetime.now()
 						for r in rollers:
-							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
-				# this is for cases where the rollers have been moved but should still be open because of the wind
-				else:
-					for r in rollers:
-						if r.getPos() != 100:
-							logger.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
-							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
-			# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
-			elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
-				if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
-					logger.info("Restoring rollers")
-					wasOpened = False
-					datetimeLastChange = datetime.datetime.now()
-					for r in rollers:
-						r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+		except e:
+			log.error("Unexpected error happened when processing WeeWx data: " + str(e))
+
 		time.sleep(sleepTime)
 
 def stopAll(signum, frame):
