@@ -3,6 +3,8 @@
 
 import requests
 from requests.auth import HTTPBasicAuth
+import requests.exceptions
+connectionsMaxRetries = 10
 
 import pprint
 pp = pprint.PrettyPrinter(depth=3)
@@ -24,10 +26,6 @@ executors = {
 }
 
 import argparse
-import logging as log
-
-from astral import Astral, Location
-
 
 class ExtendAction(argparse.Action):
 
@@ -35,6 +33,27 @@ class ExtendAction(argparse.Action):
 		items = getattr(namespace, self.dest) or []
 		items.extend(values)
 		setattr(namespace, self.dest, items)
+
+
+from astral import Astral, Location
+
+
+import logging as log
+import sys
+
+class StreamToLogger(object):
+	"""
+	Fake file-like stream object that redirects writes to a logger instance.
+	https://www.electricmonk.nl/log/2011/08/14/redirect-stdout-and-stderr-to-a-logger-in-python/
+	"""
+	def __init__(self, logger, log_level=log.INFO):
+		self.logger = logger
+		self.log_level = log_level
+		self.linebuf = ''
+
+	def write(self, buf):
+		for line in buf.rstrip().splitlines():
+			 self.logger.log(self.log_level, line.rstrip())
 
 parser = argparse.ArgumentParser()
 parser.register('action', 'extend', ExtendAction)
@@ -48,17 +67,49 @@ parser.add_argument('-p', '--pid', dest='pidFile', nargs=1, help='location of PI
 parser.set_defaults(configFile = 'rollerController.conf', logFile = None, pidFile = None)
 args = parser.parse_args()
 
-if args.debug:
-	log.basicConfig(format="%(levelname)s: %(message)s", level=log.DEBUG)
-elif args.verbose:
-	log.basicConfig(format="%(levelname)s: %(message)s", level=log.INFO)
-else:
-	log.basicConfig(format="%(levelname)s: %(message)s")
+logFormatStr="%(levelname)s|%(name)s|%(asctime)s|%(message)s"
 
-logger = log.getLogger()
+logger = log.getLogger("ShellyRollerController")
+formatter = log.Formatter(logFormatStr)
+
+if args.logFile == None and not args.nodaemon:
+	print("Log file has to be specified for the daemon mode")
+	exit(1)
+
+logLevel = log.WARN
+if args.debug:
+	logLevel=log.DEBUG
+elif args.verbose:
+	logLevel=log.INFO
+
+logHandlers = []
+
 if args.logFile != None:
 	logFH = log.FileHandler(args.logFile[0])
-	logger.addHandler(logFH)
+	logFH.setFormatter(formatter)
+	if args.debug or args.verbose:
+		# file logging max to INFO, since otherwise we fill the storage too fast
+		logFH.setLevel(log.INFO)
+	logHandlers.append(logFH)
+
+if args.nodaemon:
+	logSH = log.StreamHandler()
+	logSH.setFormatter(formatter)
+	logHandlers.append(logSH)
+else:
+	stdout_logger = log.getLogger('STDOUT')
+	sl = StreamToLogger(stdout_logger, log.INFO)
+	sys.stdout = sl
+	stderr_logger = log.getLogger('STDERR')
+	sl = StreamToLogger(stderr_logger, log.ERROR)
+	sys.stderr = sl
+
+# XXX this is a temporary hack before we do it properly
+# log.basicConfig(level=logLevel, format=logFormatStr, handlers = logHandlers)
+if args.logFile != None:
+	log.basicConfig(level=logLevel, format=logFormatStr, filename=args.logFile[0], filemode='a')
+else:
+	log.basicConfig(level=logLevel, format=logFormatStr)
 
 if args.pidFile != None:
 	pidFile = args.pidFile[0]
@@ -109,8 +160,20 @@ class ShellyRollerController:
 
 	def getHTTPResp(self, urlPath):
 		assert isinstance(urlPath, str)
-		resp = requests.get('http://' + self.IP + urlPath, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
-		# TODO: implement exception logic and retries
+		connectionTry = 0
+		targetUrl = 'http://' + self.IP + urlPath
+		resp = None
+		try:
+			while connectionTry < connectionsMaxRetries:
+				try:
+					connectionTry += 1
+					log.debug("Connecting (try " + str(connectionTry) + ") to " + self.getNameIP() + ": " + targetUrl)
+					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+					break
+				except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
+					log.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
+		except requests.exceptions.RequestException as e:
+			log.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
 		return resp
 
 	def getState(self):
@@ -216,7 +279,7 @@ class ShellyRollerController:
 
 	def submitRequest(self, request):
 		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
-		log.debug("Roller " + str(self) + ": submitting request " + str(request))
+		logger.debug("Roller " + str(self) + ": submitting request " + str(request))
 		self.requestQueue.append(request)
 
 avgWindThreshold = 40.0
@@ -313,10 +376,10 @@ def getNextSunEvent(event, offsetSeconds = None):
 	assert offsetSeconds == None or isinstance(offsetSeconds, int)
 	sun = city.sun(date=datetime.date.today(), local=True)
 	sunEvent = sun[event].replace(tzinfo=None)
-	log.debug(str(sunEvent))
+	logger.debug(str(sunEvent))
 	if offsetSeconds != None:
 		sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
-		log.debug(str(sunEvent))
+		logger.debug(str(sunEvent))
 	if datetime.datetime.now() >= sunEvent:
 		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
 		sunEvent = sun[event].replace(tzinfo=None)
@@ -335,7 +398,7 @@ sunJobs = []
 
 def scheduleSunJobs():
 	for job in sunJobs:
-		log.debug("Scheduling " + str(job))
+		logger.debug("Scheduling " + str(job))
 		scheduler.add_job(job.job, trigger='date', next_run_time = str(getNextSunEvent(job.event, job.offsetSeconds)))
 
 def registerSunJob(job, event, offsetSeconds = None):
