@@ -7,9 +7,6 @@ import requests.exceptions
 connectionsMaxRetries = 10
 connectionsRetryTimeStepSecs = 1
 
-import pprint
-pp = pprint.PrettyPrinter(depth=3)
-
 import time
 import datetime
 import re
@@ -74,7 +71,7 @@ logFormatStr="%(levelname)s|%(name)s|%(asctime)s|%(message)s"
 logger = log.getLogger("ShellyRollerController")
 formatter = log.Formatter(logFormatStr)
 
-if args.logFile == None and not args.nodaemon:
+if args.logFile is None and not args.nodaemon:
 	print("Log file has to be specified for the daemon mode")
 	exit(1)
 
@@ -89,7 +86,8 @@ log.getLogger('urllib3.connectionpool').setLevel(log.WARN)
 
 logHandlers = []
 
-if args.logFile != None:
+logFH = None
+if args.logFile is not None:
 	logFH = log.FileHandler(args.logFile[0])
 	logFH.setFormatter(formatter)
 	if args.debug or args.verbose:
@@ -111,12 +109,12 @@ else:
 
 # XXX this is a temporary hack before we do it properly
 # log.basicConfig(level=logLevel, format=logFormatStr, handlers = logHandlers)
-if args.logFile != None:
+if args.logFile is not None:
 	log.basicConfig(level=logLevel, format=logFormatStr, filename=args.logFile[0], filemode='a')
 else:
 	log.basicConfig(level=logLevel, format=logFormatStr)
 
-if args.pidFile != None:
+if args.pidFile is not None:
 	pidFile = args.pidFile[0]
 
 class ShellyRollerControllerRequest:
@@ -228,7 +226,7 @@ class ShellyRollerController:
 	def setPosIfNotWindy(self, pos):
 		assert(isinstance(pos, int))
 		assert(pos >= 0 and pos <= 100)
-		if(self.savedState != None):
+		if(self.savedState is not None):
 			self.setPos(pos)
 		else:
 			# if the roller is up due to the wind, we set the restore position instead
@@ -275,7 +273,7 @@ class ShellyRollerController:
 			self.savedState = state
 
 	def restoreState(self):
-		if(self.savedState != None):
+		if(self.savedState is not None):
 			currentState = self.getState()
 			if(int(currentState['current_pos']) == 100):
 				self.setPos(self.savedState['current_pos'])
@@ -377,33 +375,43 @@ wgustMonitor = SlidingMonitor();
 
 scheduler = BackgroundScheduler(daemon=True,timezone=config['location']['timezone'],job_defaults={'misfire_grace_time': 5*60})
 
+def getScheduledJobList():
+	return "Scheduled jobs\n" + "\n".join([ "name=" + str(j.name) + ' next_run_time=' + str(j.next_run_time.strftime("%Y-%m-%d %H:%M:%S %Z")) for j in scheduler.get_jobs()])
+
+def logInfoScheduledJobList():
+	logger.info(getScheduledJobList())
+
+def logDebugScheduledJobList():
+	logger.debug(getScheduledJobList())
+
 def getNextSunEvent(event, offsetSeconds = None, minTime = None, maxTime = None):
 	assert isinstance(event, str)
-	assert offsetSeconds == None or isinstance(offsetSeconds, int)
-	assert minTime == None or isinstance(minTime, datetime.time)
-	assert maxTime == None or isinstance(maxTime, datetime.time)
+	assert offsetSeconds is None or isinstance(offsetSeconds, int)
+	assert minTime is None or isinstance(minTime, datetime.time)
+	assert maxTime is None or isinstance(maxTime, datetime.time)
 	sun = city.sun(date=datetime.date.today(), local=True)
 	sunEvent = sun[event].replace(tzinfo=None)
-	if offsetSeconds != None:
+	if offsetSeconds is not None:
 		sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
-	if datetime.datetime.now() >= sunEvent:
+	# 1 min buffer is there to avoid problems with rescheduling of the task to the same timeslot
+	if datetime.datetime.now() + datetime.timedelta(minutes=1) >= sunEvent:
 		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
 		sunEvent = sun[event].replace(tzinfo=None)
-		if offsetSeconds != None:
+		if offsetSeconds is not None:
 			sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
 	#log.debug('sunEvent="' + str(sunEvent) + '" minTime="' + str(minTime) + '" maxTime= "' + str(maxTime) + '"')
-	if minTime != None and sunEvent.time() < minTime:
+	if minTime is not None and sunEvent.time() < minTime:
 		sunEvent = sunEvent.replace(hour=minTime.hour, minute=minTime.minute, second=minTime.second)
-	if maxTime != None and sunEvent.time() > maxTime:
+	if maxTime is not None and sunEvent.time() > maxTime:
 		sunEvent = sunEvent.replace(hour=maxTime.hour, minute=maxTime.minute, second=maxTime.second)
 	return sunEvent
 
 class SunJob:
 
 	def __init__(self, job, event, offsetSeconds = None, minTime = None, maxTime = None):
-		assert offsetSeconds == None or isinstance(offsetSeconds, int)
-		assert minTime == None or isinstance(minTime, datetime.time)
-		assert maxTime == None or isinstance(maxTime, datetime.time)
+		assert offsetSeconds is None or isinstance(offsetSeconds, int)
+		assert minTime is None or isinstance(minTime, datetime.time)
+		assert maxTime is None or isinstance(maxTime, datetime.time)
 		self.job = job
 		self.event = event
 		self.offsetSeconds = offsetSeconds
@@ -414,12 +422,13 @@ sunJobs = []
 sunJobsIds = []
 
 def schedulerSunJobAdd(sunJob):
+	log.debug("Scheduling " + str(sunJob.job) + " to " + str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime)))
 	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime)))
 
 def scheduleSunJob(job, event, offsetSeconds = None, minTime = None, maxTime = None):
-	assert offsetSeconds == None or isinstance(offsetSeconds, int)
-	assert minTime == None or isinstance(minTime, datetime.time)
-	assert maxTime == None or isinstance(maxTime, datetime.time)
+	assert offsetSeconds is None or isinstance(offsetSeconds, int)
+	assert minTime is None or isinstance(minTime, datetime.time)
+	assert maxTime is None or isinstance(maxTime, datetime.time)
 	sunJob = SunJob(job, event, offsetSeconds = offsetSeconds, minTime = minTime, maxTime = maxTime)
 	sunJobs.append(sunJob)
 	job = schedulerSunJobAdd(sunJob)
@@ -440,12 +449,11 @@ def rescheduleSunJobs(event):
 			logger.debug("Rescheduling " + str(sunJob))
 			job = schedulerSunJobAdd(sunJob)
 			sunJobsIds[sunJobIdx] = job.id
+			logInfoScheduledJobList()
 
 def scheduleDateJob(job, date):
-	scheduler.add_job(job, trigger='date', next_run_time = date)
-
-def logScheduledJobs():
-	logger.debug("Scheduled jobs\n" + "\n".join([ "name=" + str(j.name) + ' next_run_time=' + str(j.next_run_time.strftime("%Y-%m-%d %H:%M:%S %Z")) for j in scheduler.get_jobs()]))
+	log.info("Scheduling " + str(job) + " to " + str(date))
+	return scheduler.add_job(job, trigger='date', next_run_time = date)
 
 def main_code():
 	lastDate = ""
@@ -457,23 +465,21 @@ def main_code():
 
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
 	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk')
+	#scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
+	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk', maxTime=datetime.time(hour=21, minute=00))
 
 	if args.testRollers:
-		scheduler.add_job(logScheduledJobs,'interval',seconds=5)
+		scheduler.add_job(logDebugScheduledJobList,'interval',seconds=5)
 		# this is to test movement of rollers
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(15)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=15))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
 	elif args.debug:
-		scheduler.add_job(logScheduledJobs,'interval',seconds=30)
-	else:
-		scheduler.add_job(logScheduledJobs,'interval',seconds=300)
+		scheduler.add_job(logDebugScheduledJobList,'interval',seconds=30)
 
 	scheduler.start()
-	logScheduledJobs()
+	logInfoScheduledJobList()
 	while True:
 		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
 		try:
@@ -545,16 +551,24 @@ if args.nodaemon:
 		stopAll(0,None)
 		exit(0)
 else:
-	#from daemonize import Daemonize
-	#daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
-	#daemon.sigterm = stopAll
-	#daemon.start()
+#	from daemonize import Daemonize
+#	assert logFH is not None
+#	assert isinstance(pidFile, str) and pidFile != ""
+#	assert logger is not None
+#	try:
+#		daemon = Daemonize(app = "rollerController", action = main_code, pid = pidFile, keep_fds = [ logFH.stream ], logger=logger)
+#		daemon.sigterm = stopAll
+#		logger.info("Daemonizing " + __name__)
+#		daemon.start()
+#	except:
+#		raise
+
 	import daemon
+	from daemon.pidlockfile import PIDLockFile
 	import signal
-	import lockfile
-	with daemon.DaemonContext(
-			files_preserve=[ logFH.stream ],
-			pidfile=lockfile.FileLock(pidFile),
-			signal_map = {signal.SIGTERM : stopAll},
-		):
+	assert logFH is not None
+	assert isinstance(pidFile, str) and pidFile != ""
+	log.info("Deamonizing " + __name__)
+	with daemon.DaemonContext(files_preserve=[ logFH.stream ], pidfile=PIDLockFile(pidFile), signal_map = {signal.SIGTERM : stopAll}, ):
+		log.info("Deamonizing " + __name__)
 		main_code()
