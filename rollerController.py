@@ -582,6 +582,7 @@ def main_code():
 					logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
 			logger.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
 
+			# wind processing gets higher priority
 			# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
 			if(wlatestMonitor.isFull()):
 				datetimeNow = datetime.datetime.now()
@@ -614,6 +615,7 @@ def main_code():
 						datetimeLastOpened = datetime.datetime.now()
 						for r in rollers:
 							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+			# temperature-based decisiona are only implemented if wind-based decisions are not interfering
 			if(tempMonitor.isFull()):
 				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth:
 					if not wasOpened and not wasClosedDueToTemp:
