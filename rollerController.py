@@ -13,6 +13,7 @@ import re
 import os.path
 import json
 import collections
+import Queue
 from statistics import mean
 from enum import Enum
 
@@ -25,6 +26,8 @@ executors = {
 import apscheduler.events
 
 import argparse
+
+import inspect
 
 class ExtendAction(argparse.Action):
 
@@ -127,28 +130,39 @@ class ShellyRollerControllerRequestEvent (ShellyRollerControllerRequest):
 		assert(targetPos >= 0 and targetPos <= 100)
 		self.targetPos = targetPos
 
+	def __str__(self):
+		return "ShellyRollerControllerRequestEvent, target position " + str(self.targetPos)
+
 class ShellyRollerControllerRequestWindType(Enum):
 	RESTORE = 0
 	OPEN = 1
+	CLOSE = 2
 
 class ShellyRollerControllerRequestWind (ShellyRollerControllerRequest):
 	def __init__(self, action):
-		assert isinstance(action, ShellyRollerControllerRequestWindType)
+		# XXX this is a weird Python bug, returing int instead of ShellyRollerControllerRequestWindType
+		#assert isinstance(action, ShellyRollerControllerRequestWindType), "Expected ShellyRollerControllerRequestWindType, got " + str(type(action))
 		self.action = action
+
+	def __str__(self):
+		return "ShellyRollerControllerRequestWind, target action " + str(self.action)
 
 class ShellyRollerController:
 
-	def __init__(self, name, IP, authUserName, authPassword):
+	def __init__(self, name, IP, authUserName, authPassword, solarAzimuthMin, solarAzimuthMax):
 		assert isinstance(authUserName, str), "Expected string, got " + str(type(authUserName))
 		assert isinstance(authPassword, str), "Expected string, got " + str(type(authPassword))
+		assert isinstance(solarAzimuthMin, int), "Expected int, got " + str(type(solarAzimuthMin))
+		assert isinstance(solarAzimuthMax, int), "Expected int, got " + str(type(solarAzimuthMax))
 
-		self.requestQueue = collections.deque()
+		self.requestQueue = Queue.Queue()
 		self.name = name
 		self.IP = IP
 		self.authUserName = authUserName
 		self.authPassword = authPassword
 		self.shutdownRequested = False
 		self.savedState = None
+		self.windState = None
 
 		# check that the roller is properly configured - in a positioning state
 		state = self.getState()
@@ -240,13 +254,18 @@ class ShellyRollerController:
 	def rollerMainThread(self):
 		while not self.shutdownRequested:
 			try:
-				request = self.requestQueue.popleft()
+				request = self.requestQueue.get(block = True, timeout = 1)
 				assert(isinstance(request, ShellyRollerControllerRequest))
 				if isinstance(request, ShellyRollerControllerRequestWind):
-					if(request.action == ShellyRollerControllerRequest.OPEN):
+					if(request.action == ShellyRollerControllerRequestWindType.OPEN):
 						self.saveState()
 						self.setPos(100)
-					elif(request.action == ShellyRollerControllerRequest.RESTORE):
+						self.windState = 100
+					elif(request.action == ShellyRollerControllerRequestWindType.CLOSE):
+						self.saveState()
+						self.setPos(0)
+						self.windState = 0
+					elif(request.action == ShellyRollerControllerRequestWindType.RESTORE):
 						self.restoreState()
 					else:
 						logger.error('Got unknown wind request: ' + str(request))
@@ -254,9 +273,8 @@ class ShellyRollerController:
 					self.setPos(request.targetPos)
 				else:
 					logger.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
-			except IndexError as i:
+			except Queue.Empty as e:
 				pass
-			time.sleep(1)
 		
 	def waitUntilStopGetState(self):
 		while True:
@@ -271,25 +289,36 @@ class ShellyRollerController:
 		# save the state if not open
 		if not (int(state['current_pos']) == 100):
 			self.savedState = state
+	
+	def overrideRestoreState(self, pos):
+		assert isinstance(pos, int)
+		self.savedState = pos
 
 	def restoreState(self):
 		if(self.savedState is not None):
 			currentState = self.getState()
-			if(int(currentState['current_pos']) == 100):
+			assert self.windState is not None
+			if(int(currentState['current_pos']) == self.windState):
 				self.setPos(self.savedState['current_pos'])
 				self.savedState = None
+				self.windState = None
 			else:
-			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected open (100) state, got " + int(currentState['current_pos']))
+			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected " + str(self.windState) + " state, got " + str(int(currentState['current_pos'])))
 
 	def submitRequest(self, request):
 		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
 		logger.debug("Roller " + str(self) + ": submitting request " + str(request))
-		self.requestQueue.append(request)
+		try:
+			self.requestQueue.put(request, block = True, timeout = 2)
+		except Queue.Full as e:
+			logger.warn("Request queue for roller is full - not adding request " + str(request))
 
 avgWindThreshold = 40.0
 avgGustThreshold =  70.0
 timeOpenThresholdMinutes = 10
 timeRestoreThresholdMinutes = 30
+closeAtTemperatureAtAnyAzimuth = 30
+closeAtTemperatureAtDirectSunlight = 25
 
 gaugeFile = '/tmp/gauge-data.txt'
 sleepTime =  60
@@ -319,9 +348,11 @@ with open(args.configFile) as configFile:
 		avgGustThreshold = assignValFromDict(config['thresholds'],'avgGustThreshold', avgGustThreshold)
 		timeOpenThresholdMinutes = assignValFromDict(config['thresholds'],'timeOpenThresholdMinutes', timeOpenThresholdMinutes)
 		timeRestoreThresholdMinutes = assignValFromDict(config['thresholds'],'timeRestoreThresholdMinutes', timeRestoreThresholdMinutes)
+		timeRestoreThresholdMinutes = assignValFromDict(config['thresholds'],'closeAtTemperatureAtAnyAzimuth', closeAtTemperatureAtAnyAzimuth)
+		timeRestoreThresholdMinutes = assignValFromDict(config['thresholds'],'closeAtTemperatureAtDirectSunlight', closeAtTemperatureAtDirectSunlight)
 	if "rollers" in config:
 		for r in config['rollers']:
-			rollers.append(ShellyRollerController(r['name'], str(r['IP']), str(r['rollerUsername']), str(r['rollerPassword'])))
+			rollers.append(ShellyRollerController(r['name'], str(r['IP']), str(r['rollerUsername']), str(r['rollerPassword']), r['solarAzimuthMin'], r['solarAzimuthMax']))
 	if "WeeWxGaugeFile" in config:
 		gaugeFile = assignValFromDict(config['WeeWxGaugeFile'],'location', gaugeFile)
 		sleepTime = assignValFromDict(config['WeeWxGaugeFile'],'readPeriodSecs', sleepTime)
@@ -365,6 +396,7 @@ class SlidingMonitor:
 		
 wlatestMonitor = SlidingMonitor();
 wgustMonitor = SlidingMonitor();
+tempMonitor = SlidingMonitor();
 
 #a = astral.Astral()
 #a.solar_depression = 'civil'
@@ -376,7 +408,7 @@ wgustMonitor = SlidingMonitor();
 scheduler = BackgroundScheduler(daemon=True,timezone=config['location']['timezone'],job_defaults={'misfire_grace_time': 5*60})
 
 def getScheduledJobList():
-	return "Scheduled jobs\n" + "\n".join([ "name=" + str(j.name) + ' next_run_time=' + str(j.next_run_time.strftime("%Y-%m-%d %H:%M:%S %Z")) for j in scheduler.get_jobs()])
+	return "Scheduled jobs\n" + "\n".join([ "id=" + str(j.id) + " name=" + str(j.name) + ' next_run_time=' + str(j.next_run_time.strftime("%Y-%m-%d %H:%M:%S %Z")) for j in scheduler.get_jobs()])
 
 def logInfoScheduledJobList():
 	logger.info(getScheduledJobList())
@@ -384,52 +416,65 @@ def logInfoScheduledJobList():
 def logDebugScheduledJobList():
 	logger.debug(getScheduledJobList())
 
-def getNextSunEvent(event, offsetSeconds = None, minTime = None, maxTime = None):
+def getNextSunEvent(event, offsetSeconds = None, minTime = None, maxTime = None, todayFired = False):
 	assert isinstance(event, str)
 	assert offsetSeconds is None or isinstance(offsetSeconds, int)
 	assert minTime is None or isinstance(minTime, datetime.time)
 	assert maxTime is None or isinstance(maxTime, datetime.time)
-	sun = city.sun(date=datetime.date.today(), local=True)
-	sunEvent = sun[event].replace(tzinfo=None)
-	if offsetSeconds is not None:
-		sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
-	# 1 min buffer is there to avoid problems with rescheduling of the task to the same timeslot
-	if datetime.datetime.now() + datetime.timedelta(minutes=1) >= sunEvent:
-		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
+
+	def getSunEvent():
 		sunEvent = sun[event].replace(tzinfo=None)
 		if offsetSeconds is not None:
 			sunEvent = sunEvent + datetime.timedelta(seconds=offsetSeconds)
+		if minTime is not None and sunEvent.time() < minTime:
+			sunEvent = sunEvent.replace(hour=minTime.hour, minute=minTime.minute, second=minTime.second)
+		if maxTime is not None and sunEvent.time() > maxTime:
+			sunEvent = sunEvent.replace(hour=maxTime.hour, minute=maxTime.minute, second=maxTime.second)
+		return sunEvent
+
+	sun = city.sun(date=datetime.date.today(), local=True)
+	sunEvent = getSunEvent()
+	if datetime.datetime.now() >= sunEvent or todayFired:
+		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
+		sunEvent = getSunEvent()
 	#log.debug('sunEvent="' + str(sunEvent) + '" minTime="' + str(minTime) + '" maxTime= "' + str(maxTime) + '"')
-	if minTime is not None and sunEvent.time() < minTime:
-		sunEvent = sunEvent.replace(hour=minTime.hour, minute=minTime.minute, second=minTime.second)
-	if maxTime is not None and sunEvent.time() > maxTime:
-		sunEvent = sunEvent.replace(hour=maxTime.hour, minute=maxTime.minute, second=maxTime.second)
 	return sunEvent
 
 class SunJob:
 
-	def __init__(self, job, event, offsetSeconds = None, minTime = None, maxTime = None):
+	def __init__(self, job, event, offsetSeconds = None, minTime = None, maxTime = None, args = None, kwargs = None):
 		assert offsetSeconds is None or isinstance(offsetSeconds, int)
 		assert minTime is None or isinstance(minTime, datetime.time)
 		assert maxTime is None or isinstance(maxTime, datetime.time)
+		assert args is None or isinstance(args, list)
+		assert kwargs is None or isinstance(kwargs, dict)
 		self.job = job
+		self.args = args
+		self.kwargs = kwargs
 		self.event = event
 		self.offsetSeconds = offsetSeconds
 		self.minTime = minTime
 		self.maxTime = maxTime
 
+	def getFunctionNameWithParams(self):
+		paramsList = []
+		if self.args is not None:
+			for i in self.args:
+				paramsList.append(str(i))
+		if self.kwargs is not None:
+			for k,v in self.kwargs.items():
+				paramsList.append(str(k) + "=" + str(v))
+		return str(self.job.__name__) + "(" + ",".join(paramsList) + ")"
+
 sunJobs = []
 sunJobsIds = []
 
-def schedulerSunJobAdd(sunJob):
-	log.debug("Scheduling " + str(sunJob.job) + " to " + str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime)))
-	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime)))
+def schedulerSunJobAdd(sunJob, todayFired = False):
+	log.debug("Scheduling " + sunJob.getFunctionNameWithParams() + " to " + str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime, todayFired = todayFired)))
+	return scheduler.add_job(sunJob.job, trigger='date', next_run_time = str(getNextSunEvent(sunJob.event, offsetSeconds = sunJob.offsetSeconds, minTime = sunJob.minTime, maxTime = sunJob.maxTime, todayFired = todayFired)), args = sunJob.args, kwargs = sunJob.kwargs, name = sunJob.getFunctionNameWithParams())
 
-def scheduleSunJob(job, event, offsetSeconds = None, minTime = None, maxTime = None):
-	assert offsetSeconds is None or isinstance(offsetSeconds, int)
-	assert minTime is None or isinstance(minTime, datetime.time)
-	assert maxTime is None or isinstance(maxTime, datetime.time)
-	sunJob = SunJob(job, event, offsetSeconds = offsetSeconds, minTime = minTime, maxTime = maxTime)
+def scheduleSunJob(job, event, offsetSeconds = None, minTime = None, maxTime = None, args = None, kwargs = None):
+	sunJob = SunJob(job, event, offsetSeconds = offsetSeconds, minTime = minTime, maxTime = maxTime, args = args, kwargs = kwargs)
 	sunJobs.append(sunJob)
 	job = schedulerSunJobAdd(sunJob)
 	sunJobsIds.append(job.id)
@@ -447,34 +492,66 @@ def rescheduleSunJobs(event):
 			sunJobIdx = sunJobsIds.index(jobId)
 			sunJob = sunJobs[sunJobIdx]
 			logger.debug("Rescheduling " + str(sunJob))
-			job = schedulerSunJobAdd(sunJob)
+			job = schedulerSunJobAdd(sunJob, todayFired = True)
+			assert job.next_run_time > datetime.datetime.now() + datetime.timedelta(hours=1), "Sun jobs are not likely to repeat in less than 1 hour, please examine:\n" + str(event) + "\n" + str(job)
 			sunJobsIds[sunJobIdx] = job.id
 			logInfoScheduledJobList()
 
 def scheduleDateJob(job, date):
-	log.info("Scheduling " + str(job) + " to " + str(date))
+	jobString = job.__name__
+	if jobString == "<lambda>":
+		try:
+			jobString =  jobString + ' from "' + str(inspect.getsource(job)).strip() + '"'
+		except IOError as e:
+			pass
+	log.info("Scheduling " + jobString + " to " + str(date))
 	return scheduler.add_job(job, trigger='date', next_run_time = date)
 
+wasOpened = False
+datetimeLastOpened = datetime.datetime.now()
+
+wasClosedDueToTemp = False
+wasClosedDueToTempAndSunAzimuth = {}
+for r in rollers:
+	wasClosedDueToTempAndSunAzimuth[r] = False
+
+def requestPositionAllRollers(pos):
+	wasClosedDueToTemp = False
+	for r in rollers:
+		r.submitRequest(ShellyRollerControllerRequestEvent(pos))
+		wasClosedDueToTempAndSunAzimuth[r] = False
+
+class WeeWxReadoutError(Exception):
+	pass
+		
 def main_code():
 	lastDate = ""
 	lastDateNumeric = 0
-	wasOpened = False
-	datetimeLastChange = datetime.datetime.now()
+
+	global wasOpened
+	global datetimeLastOpened
+	global wasClosedDueToTemp
+	global wasClosedDueToTempAndSunAzimuth
 
 	scheduler.add_listener(rescheduleSunJobs, apscheduler.events.EVENT_JOB_EXECUTED | apscheduler.events.EVENT_JOB_ERROR)
 
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], 'dawn')
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], 'sunrise')
-	#scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
-	scheduleSunJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(0)) for r in rollers], 'dusk', maxTime=datetime.time(hour=21, minute=00))
+	scheduleSunJob(requestPositionAllRollers, 'dawn', args=[2])
+	scheduleSunJob(requestPositionAllRollers, 'sunrise', args=[5])
+	#scheduleSunJob(requestPositionAllRollers(0), 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
+	scheduleSunJob(requestPositionAllRollers, 'dusk', args=[0], maxTime=datetime.time(hour=21, minute=00))
 
 	if args.testRollers:
 		scheduler.add_job(logDebugScheduledJobList,'interval',seconds=5)
 		# this is to test movement of rollers
+		#logger.debug("ShellyRollerControllerRequestWindType.CLOSE is of type " + str(type(ShellyRollerControllerRequestWindType.CLOSE)) + " and repr is " + repr(ShellyRollerControllerRequestWindType.CLOSE))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(15)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=15))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
 		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
-		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestEvent(1)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=75))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=120))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=150))
+		scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=180))
 	elif args.debug:
 		scheduler.add_job(logDebugScheduledJobList,'interval',seconds=30)
 
@@ -486,14 +563,8 @@ def main_code():
 			with open(gaugeFile) as gaugeFile_json:
 				data = json.load(gaugeFile_json)
 				assert(data['windunit'] == 'km/h')
-				logger.debug("Storing wlatest " + data['wlatest'])
-				wlatestMonitor.append(float(data['wlatest']))
-				logger.debug("Storing wgust " + data['wgust'])
-				wgustMonitor.append(float(data['wgust']))
-				if(float(data['wlatest']) > float(data['wgust'])):
-					logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
 				if(lastDate != "" and lastDate == data['date']):
-					logger.warn("Unexpected situation: gauge hasn't been updated during the last readout period")
+					raise WeeWxReadoutError("Gauge hasn't been updated during the last readout period - ignoring")
 				else:
 					lastDate = data['date']
 					try:
@@ -501,12 +572,20 @@ def main_code():
 						logger.debug("Last date numeric is " + str(lastDateNumeric))
 					except Exception as e:
 						logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
+				logger.debug("Storing wlatest " + data['wlatest'])
+				wlatestMonitor.append(float(data['wlatest']))
+				logger.debug("Storing wgust " + data['wgust'])
+				wgustMonitor.append(float(data['wgust']))
+				logger.debug("Storing temp " + data['temp'])
+				tempMonitor.append(float(data['temp']))
+				if(float(data['wlatest']) > float(data['wgust'])):
+					logger.warn("Unexpected situation: wlatest > wgust (" + data['wlatest'] + " > " + data['wgust'] + ")")
 			logger.debug("Sliding average of wlatest is " + str(wlatestMonitor.getAvg()))
 
 			# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
 			if(wlatestMonitor.isFull()):
 				datetimeNow = datetime.datetime.now()
-				timeDiff = datetimeNow - datetimeLastChange
+				timeDiff = datetimeNow - datetimeLastOpened
 				timeDiffMinutes = int(timeDiff.total_seconds() / 60.0)
 				if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold:
 					# this is normal condition to raise the rollers
@@ -515,7 +594,10 @@ def main_code():
 						if timeDiffMinutes >= timeOpenThresholdMinutes:
 							logger.info("Rising rollers")
 							wasOpened = True
-							datetimeLastChange = datetime.datetime.now()
+							wasClosedDueToTemp = False
+							for r in rollers:
+								wasClosedDueToTempAndSunAzimuth[r] = False
+							datetimeLastOpened = datetime.datetime.now()
 							for r in rollers:
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
 					# this is for cases where the rollers have been moved but should still be open because of the wind
@@ -529,10 +611,44 @@ def main_code():
 					if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
 						logger.info("Restoring rollers")
 						wasOpened = False
-						datetimeLastChange = datetime.datetime.now()
+						datetimeLastOpened = datetime.datetime.now()
 						for r in rollers:
 							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
-		except e:
+			if(tempMonitor.isFull()):
+				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth:
+					if not wasOpened and not wasClosedDueToTemp:
+						# this is safety so that we don't open the rollers too often
+						if timeDiffMinutes >= timeOpenThresholdMinutes:
+							scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
+							wasClosedDueToTemp = True
+							datetimeLastOpened = datetime.datetime.now()
+					elif wasOpened and not wasClosedDueToTemp:
+						# only change the restore state but overwise don't touch it
+						for r in rollers:
+							r.overrideRestoreState(0)
+				elif tempMonitor.getAvg() >= closeAtTemperatureAtDirectSunlight and not wasClosedDueToTemp:
+					solarAzimuth = int(city.solar_azimuth(datetime.datetime.now(), city.elevation))
+					# this is safety so that we don't open the rollers too often
+					if timeDiffMinutes >= timeOpenThresholdMinutes:
+						for r in rollers:
+							if solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax and not r.wasClosedDueToTempAndSunAzimuth[r]:
+								scheduleDateJob(lambda : r.submitRequest(ShellyRollerControllerRequestWindType.CLOSE), datetime.datetime.now() + datetime.timedelta(seconds=1))
+								wasClosedDueToTempAndSunAzimuth[r] = True
+						datetimeLastOpened = datetime.datetime.now()
+						time.sleep(2)
+
+				if tempMonitor.getAvg() < 0.7*closeAtTemperatureAtDirectSunlight:
+					if wasClosedDueToTemp and timeDiffMinutes >= timeRestoreThresholdMinutes:
+						scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
+						wasClosedDueToTemp = False
+						for r in rollers:
+							wasClosedDueToTempAndSunAzimuth[r] = False
+						time.sleep(2)
+
+		except WeeWxReadoutError as e:
+			logger.debug(e.message)
+
+		except Exception as e:
 			logger.error("Unexpected error happened when processing WeeWx data: " + str(e))
 
 		time.sleep(sleepTime)
