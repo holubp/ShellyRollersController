@@ -162,7 +162,7 @@ class ShellyRollerController:
 		self.authPassword = authPassword
 		self.shutdownRequested = False
 		self.savedState = None
-		self.windState = None
+		self.restorePos = None
 
 		# check that the roller is properly configured - in a positioning state
 		state = self.getState()
@@ -260,11 +260,11 @@ class ShellyRollerController:
 					if(request.action == ShellyRollerControllerRequestWindType.OPEN):
 						self.saveState()
 						self.setPos(100)
-						self.windState = 100
+						self.restorePos = 100
 					elif(request.action == ShellyRollerControllerRequestWindType.CLOSE):
 						self.saveState()
 						self.setPos(0)
-						self.windState = 0
+						self.restorePos = 0
 					elif(request.action == ShellyRollerControllerRequestWindType.RESTORE):
 						self.restoreState()
 					else:
@@ -290,28 +290,31 @@ class ShellyRollerController:
 		if not (int(state['current_pos']) == 100):
 			self.savedState = state
 	
-	def overrideRestoreState(self, pos):
-		assert isinstance(pos, int)
-		self.savedState = pos
-
 	def restoreState(self):
 		if(self.savedState is not None):
 			currentState = self.getState()
-			assert self.windState is not None
-			if(int(currentState['current_pos']) == self.windState):
+			assert self.restorePos is not None
+			if(int(currentState['current_pos']) == self.restorePos):
 				self.setPos(self.savedState['current_pos'])
 				self.savedState = None
-				self.windState = None
+				self.restorePos = None
 			else:
-			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected " + str(self.windState) + " state, got " + str(int(currentState['current_pos'])))
+			 	logger.info("Not restoring the state as the roller was moved in the meantime - expected " + str(self.restorePos) + " state, got " + str(int(currentState['current_pos'])))
 
 	def submitRequest(self, request):
 		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
-		logger.debug("Roller " + str(self) + ": submitting request " + str(request))
-		try:
-			self.requestQueue.put(request, block = True, timeout = 2)
-		except Queue.Full as e:
-			logger.warn("Request queue for roller is full - not adding request " + str(request))
+		if self.savedState is None:
+			logger.debug("Roller " + str(self) + ": submitting request " + str(request))
+			try:
+				self.requestQueue.put(request, block = True, timeout = 2)
+			except Queue.Full as e:
+				logger.warn("Request queue for roller is full - not adding request " + str(request))
+		else:
+			if isinstance(request, ShellyRollerControllerRequestEvent):
+				logger.debug("Roller " + str(self) + ": modifying restore state to " + str(request.targetPos))
+				self.restorePos = request.targetPos
+			else:
+				logger.warn("Obtained wind-/sun-related request while savedState == True" + str(request))
 
 avgWindThreshold = 40.0
 avgGustThreshold =  70.0
@@ -508,7 +511,7 @@ def scheduleDateJob(job, date):
 	return scheduler.add_job(job, trigger='date', next_run_time = date)
 
 wasOpened = False
-datetimeLastOpened = datetime.datetime.now()
+datetimeLastMovedWindSun = datetime.datetime.now()
 
 wasClosedDueToTemp = False
 wasClosedDueToTempAndSunAzimuth = {}
@@ -529,7 +532,7 @@ def main_code():
 	lastDateNumeric = 0
 
 	global wasOpened
-	global datetimeLastOpened
+	global datetimeLastMovedWindSun
 	global wasClosedDueToTemp
 	global wasClosedDueToTempAndSunAzimuth
 
@@ -586,21 +589,30 @@ def main_code():
 			# we only start controlling the rollers once we have complete sliding window to average, otherwise we would risk raising/restoring rollers based on initial noise
 			if(wlatestMonitor.isFull()):
 				datetimeNow = datetime.datetime.now()
-				timeDiff = datetimeNow - datetimeLastOpened
+				timeDiff = datetimeNow - datetimeLastMovedWindSun
 				timeDiffMinutes = int(timeDiff.total_seconds() / 60.0)
 				if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold:
 					# this is normal condition to raise the rollers
+					logger.debug("Wind is above the set threshold:" + 
+						" wlatestMonitor.getAvg()=" + str(wlatestMonitor.getAvg()) + 
+						" avgWindThreshold=" + str(avgWindThreshold) +
+						" wgustMonitor.getAvg()=" + str(wgustMonitor.getAvg()) +
+						" avgGustThreshold=" + str(avgGustThreshold))
 					if not wasOpened:
 						# this is safety so that we don't open the rollers too often
 						if timeDiffMinutes >= timeOpenThresholdMinutes:
-							logger.info("Rising rollers")
+							logger.info("Rising rollers because of wind")
 							wasOpened = True
 							wasClosedDueToTemp = False
 							for r in rollers:
 								wasClosedDueToTempAndSunAzimuth[r] = False
-							datetimeLastOpened = datetime.datetime.now()
+							datetimeLastMovedWindSun = datetime.datetime.now()
 							for r in rollers:
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
+						else:
+							logger.debug("Conditions met to rise rollers after wind increased, except time threshold not ready yet: " +
+								" timeDiffMinutes=" + str(timeDiffMinutes) +
+								" timeOpenThresholdMinutes=" + str(timeOpenThresholdMinutes))
 					# this is for cases where the rollers have been moved but should still be open because of the wind
 					else:
 						for r in rollers:
@@ -610,38 +622,66 @@ def main_code():
 				# restoring is only done when the wind/gusts drop substantially - that is 0.7 time the thresholds
 				elif wlatestMonitor.getAvg() < 0.7*avgWindThreshold and wgustMonitor.getAvg() < 0.7*avgGustThreshold:
 					if wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
-						logger.info("Restoring rollers")
+						logger.info("Restoring rollers after wind died down")
 						wasOpened = False
-						datetimeLastOpened = datetime.datetime.now()
+						datetimeLastMovedWindSun = datetime.datetime.now()
 						for r in rollers:
 							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+					else:
+						logger.debug("Conditions met to restore rollers after wind died down, except time threshold not ready yet: " +
+							" timeDiffMinutes=" + str(timeDiffMinutes) +
+							" timeOpenThresholdMinutes=" + str(timeRestoreThresholdMinutes))
 			# temperature-based decisiona are only implemented if wind-based decisions are not interfering
 			if(tempMonitor.isFull()):
 				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth:
 					if not wasOpened and not wasClosedDueToTemp:
 						# this is safety so that we don't open the rollers too often
+						logger.debug("Conditions met to close rollers due to temperature, not conflicting with the wind" +
+							" wasOpened=" + str(wasOpened) +
+							" wasClosedDueToTemp=" + str(wasClosedDueToTemp))
 						if timeDiffMinutes >= timeOpenThresholdMinutes:
 							scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
 							wasClosedDueToTemp = True
-							datetimeLastOpened = datetime.datetime.now()
-					elif wasOpened and not wasClosedDueToTemp:
+							datetimeLastMovedWindSun = datetime.datetime.now()
+						else:
+							logger.debug("Conditions met to close rollers for temperature conditions, except time threshold not ready yet: " +
+								" timeDiffMinutes=" + str(timeDiffMinutes) +
+								" timeOpenThresholdMinutes=" + str(timeOpenThresholdMinutes))
+					#elif wasOpened and not wasClosedDueToTemp:
 						# only change the restore state but overwise don't touch it
-						for r in rollers:
-							r.overrideRestoreState(0)
+						#for r in rollers:
+							#logger.info("Overriding restore state after wind dies to 0 due to temperature conditions")
+							#r.submitRequest(ShellyRollerControllerRequestEvent(0))
 				elif tempMonitor.getAvg() >= closeAtTemperatureAtDirectSunlight and not wasClosedDueToTemp:
 					solarAzimuth = int(city.solar_azimuth(datetime.datetime.now(), city.elevation))
 					# this is safety so that we don't open the rollers too often
 					if timeDiffMinutes >= timeOpenThresholdMinutes:
 						for r in rollers:
-							if solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax and not r.wasClosedDueToTempAndSunAzimuth[r]:
+							if solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax and not wasClosedDueToTempAndSunAzimuth[r]:
+								logger.debug("Conditions match to close roller " + str(r) + " due to direct sunlight:" + 
+								" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+								" closeAtTemperatureAtDirectSunlight=" + str(closeAtTemperatureAtDirectSunlight) +
+								" solarAzimuth=" + str(solarAzimuth) +
+								" r.solarAzimuthMin=" + str(r.solarAzimuthMin) +
+								" r.solarAzimuthMax=" + str(r.solarAzimuthMax) +
+								" wasClosedDueToTempAndSunAzimuth[r]=" + str(wasClosedDueToTempAndSunAzimuth[r]))
+								logger.info("Closing roller " + str(r) + " due to direct sunlight")
 								scheduleDateJob(lambda : r.submitRequest(ShellyRollerControllerRequestWindType.CLOSE), datetime.datetime.now() + datetime.timedelta(seconds=1))
 								wasClosedDueToTempAndSunAzimuth[r] = True
-						datetimeLastOpened = datetime.datetime.now()
+						datetimeLastMovedWindSun = datetime.datetime.now()
 						time.sleep(2)
 
 				if tempMonitor.getAvg() < 0.7*closeAtTemperatureAtDirectSunlight:
 					if wasClosedDueToTemp and timeDiffMinutes >= timeRestoreThresholdMinutes:
+						logger.debug("Conditions match to restore roller " + str(r) + " due to decreased temperature:" + 
+							" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+							" 0.7*closeAtTemperatureAtDirectSunlight=" + str(0.7*closeAtTemperatureAtDirectSunlight) +
+							" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
+							" timeDiffMinutes=" + str(timeDiffMinutes) +
+							" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes))
+						logger.info("Restoring rollers  due to decreased temperature")
 						scheduleDateJob(lambda : [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
+						datetimeLastMovedWindSun = datetime.datetime.now()
 						wasClosedDueToTemp = False
 						for r in rollers:
 							wasClosedDueToTempAndSunAzimuth[r] = False
