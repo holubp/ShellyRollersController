@@ -637,6 +637,8 @@ def main_code():
 					if not wasOpened and not wasClosedDueToTemp:
 						# this is safety so that we don't open the rollers too often
 						logger.debug("Conditions met to close rollers due to temperature, not conflicting with the wind" +
+							" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+							" closeAtTemperatureAtAnyAzimuth=" + str(closeAtTemperatureAtAnyAzimuth) +
 							" wasOpened=" + str(wasOpened) +
 							" wasClosedDueToTemp=" + str(wasClosedDueToTemp))
 						if timeDiffMinutes >= timeOpenThresholdMinutes:
