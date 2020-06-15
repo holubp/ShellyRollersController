@@ -389,13 +389,13 @@ class ShellyRollerController:
 				try:
 					self.requestQueue.put(request, block=True, timeout=2)
 				except Queue.Full:
-					logger.warn("Request queue for roller is full - not adding request " + str(request))
+					logger.warn("Request queue for roller is full - not submitting request " + str(request))
 			else:
 				if isinstance(request, ShellyRollerControllerRequestEvent):
 					logger.debug("Roller " + str(self) + ": modifying restore state to " + str(request.targetPos))
-					self.restorePos = request.targetPos
+					self.overrideSavedStatePos(request.targetPos)
 				else:
-					logger.warn("Obtained wind-/sun-related request while savedState == True" + str(request))
+					logger.warn("Received wind-/sun-related request while savedState == True - not submitting request " + str(request) )
 		finally:
 			self.savedStateLock.release()
 
