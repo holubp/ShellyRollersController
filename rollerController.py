@@ -66,7 +66,8 @@ parser.add_argument('-t', '--test-rollers', dest='testRollers', action='store_tr
 parser.add_argument('-c', '--config', dest='configFile', nargs=1, help='location of config file')
 parser.add_argument('-l', '--log', dest='logFile', nargs=1, help='location of log file')
 parser.add_argument('-p', '--pid', dest='pidFile', nargs=1, help='location of PID file')
-parser.set_defaults(configFile = 'rollerController.conf', logFile = None, pidFile = None)
+parser.add_argument('-r', '--dry-run', dest='dryrun', action='store_true', help='do everything as usual but do not touch the rollers')
+parser.set_defaults(configFile = 'rollerController.conf', logFile = None, pidFile = None, dryrun = False)
 args = parser.parse_args()
 
 logFormatStr="%(levelname)s|%(name)s|%(asctime)s|%(message)s"
@@ -147,6 +148,34 @@ class ShellyRollerControllerRequestWind (ShellyRollerControllerRequest):
 	def __str__(self):
 		return "ShellyRollerControllerRequestWind, target action " + str(self.action)
 
+class ShellyRollerControllerEmulator:
+	def __init__(self):
+		self.state = {}
+		self.state['current_pos'] = 5
+		self.state['is_valid'] = True
+		self.state['calibrating'] = False 
+		self.state['positioning'] = True
+		self.state['state'] = 'stop'
+		self.state['last_direction'] = "open" 
+		self.state['stop_reason'] = "normal" 
+	
+	def setPos(self, pos):
+		assert isinstance(pos, int)
+		if self.state['current_pos'] < pos:
+			self.state['last_direction'] = "open"
+		if self.state['current_pos'] > pos:
+			self.state['last_direction'] = "close"
+		# don't touch when already in the position
+		self.state['current_pos'] = pos
+		return self.state
+
+	def getState(self):
+		return self.state
+
+shellyRollerControllerEmulator = None
+if args.dryrun:
+	shellyRollerControllerEmulator = ShellyRollerControllerEmulator()
+
 class ShellyRollerController:
 
 	def __init__(self, name, IP, authUserName, authPassword, solarAzimuthMin, solarAzimuthMax):
@@ -177,28 +206,36 @@ class ShellyRollerController:
 
 	def getHTTPResp(self, urlPath):
 		assert isinstance(urlPath, str)
-		connectionTry = 0
-		targetUrl = 'http://' + self.IP + urlPath
 		resp = None
-		try:
-			while connectionTry < connectionsMaxRetries:
-				try:
-					connectionTry += 1
-					time.sleep((connectionTry-1)*connectionsRetryTimeStepSecs)
-					logger.debug("Connecting to " + self.getNameIP() + " (try " + str(connectionTry) + "): " + targetUrl)
-					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
-					break
-				except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
-					logger.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
-		except requests.exceptions.RequestException as e:
-			logger.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
+		if args.dryrun:
+			assert shellyRollerControllerEmulator is not None
+			resp = shellyRollerControllerEmulator.getState()
+		else:
+			connectionTry = 0
+			targetUrl = 'http://' + self.IP + urlPath
+			try:
+				while connectionTry < connectionsMaxRetries:
+					try:
+						connectionTry += 1
+						time.sleep((connectionTry-1)*connectionsRetryTimeStepSecs)
+						logger.debug("Connecting to " + self.getNameIP() + " (try " + str(connectionTry) + "): " + targetUrl)
+						resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+						break
+					except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
+						logger.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
+			except requests.exceptions.RequestException as e:
+				logger.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
 		return resp
 
 	def getState(self):
-		resp = self.getHTTPResp('/roller/0/state')
-		if resp.status_code != 200:
-			logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
-		return(resp.json())
+		if args.dryrun:
+			assert shellyRollerControllerEmulator is not None
+			resp = shellyRollerControllerEmulator.getState()
+		else:
+			resp = self.getHTTPResp('/roller/0/state')
+			if resp.status_code != 200:
+				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+			return(resp.json())
 	
 	def getStoppedState(self):
 		state = self.waitUntilStopGetState()
@@ -214,7 +251,11 @@ class ShellyRollerController:
 	def setPos(self, pos):
 		assert(isinstance(pos, int))
 		assert(pos >= 0 and pos <= 100)
-		state = self.getStoppedState()
+		if args.dryrun:
+			assert shellyRollerControllerEmulator is not None
+			state = shellyRollerControllerEmulator.getState()
+		else:
+			state = self.getStoppedState()
 		logger.info("Processing request to set rollers to the desired state: " + str(pos))
 		if int(state['current_pos']) == pos:
 			logger.debug("Roller is already in the desired state")
@@ -225,16 +266,24 @@ class ShellyRollerController:
 					logger.debug("No need to prepare rollers by closing them first")
 				else:
 					logger.info("Preparing rollers by closing them first")
-					resp = self.getHTTPResp(self.setPosURL() + '0')
-					if resp.status_code != 200:
-						logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+					if args.dryrun:
+						assert shellyRollerControllerEmulator is not None
+						resp = shellyRollerControllerEmulator.setPos()
+					else:
+						resp = self.getHTTPResp(self.setPosURL() + '0')
+						if resp.status_code != 200:
+							logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
 			logger.info("Setting rollers to the desired state: " + str(pos))
-			resp = self.getHTTPResp(self.setPosURL() + str(pos))
-			if resp.status_code != 200:
-				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
-			self.waitUntilStopGetState()
+			if args.dryrun:
+				assert shellyRollerControllerEmulator is not None
+				resp = shellyRollerControllerEmulator.getState()
+			else:
+				resp = self.getHTTPResp(self.setPosURL() + str(pos))
+				if resp.status_code != 200:
+					logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+				self.waitUntilStopGetState()
 
 	# this is for the scheduled events to minimize interference
 	def setPosIfNotWindy(self, pos):
@@ -437,7 +486,7 @@ def getNextSunEvent(event, offsetSeconds = None, minTime = None, maxTime = None,
 
 	sun = city.sun(date=datetime.date.today(), local=True)
 	sunEvent = getSunEvent()
-	if datetime.datetime.now() >= sunEvent or todayFired:
+	if datetime.datetime.now().replace(tzinfo=None) >= sunEvent or todayFired:
 		sun = city.sun(date=datetime.date.today() + datetime.timedelta(days=1), local=True)
 		sunEvent = getSunEvent()
 	#log.debug('sunEvent="' + str(sunEvent) + '" minTime="' + str(minTime) + '" maxTime= "' + str(maxTime) + '"')
@@ -496,7 +545,7 @@ def rescheduleSunJobs(event):
 			sunJob = sunJobs[sunJobIdx]
 			logger.debug("Rescheduling " + str(sunJob))
 			job = schedulerSunJobAdd(sunJob, todayFired = True)
-			assert job.next_run_time > datetime.datetime.now() + datetime.timedelta(hours=1), "Sun jobs are not likely to repeat in less than 1 hour, please examine:\n" + str(event) + "\n" + str(job)
+			assert job.next_run_time.replace(tzinfo=None) > datetime.datetime.now().replace(tzinfo=None) + datetime.timedelta(hours=1), "Sun jobs are not likely to repeat in less than 1 hour, please examine:\n" + str(event) + "\n" + str(job)
 			sunJobsIds[sunJobIdx] = job.id
 			logInfoScheduledJobList()
 
