@@ -163,12 +163,14 @@ class ShellyRollerControllerEmulator:
 
 	def setPos(self, pos):
 		assert isinstance(pos, int)
+		logger.debug("ShellyRollerControllerEmulator %s: setting position to %s", self, pos)
 		if self.state['current_pos'] < pos:
 			self.state['last_direction'] = "open"
 		if self.state['current_pos'] > pos:
 			self.state['last_direction'] = "close"
 		# don't touch when already in the position
 		self.state['current_pos'] = pos
+		logger.debug("ShellyRollerControllerEmulator %s: current_pos=%s last_direction=%s", self, self.state['current_pos'], self.state['last_direction'])
 		return self.state
 
 	def getState(self):
@@ -214,25 +216,22 @@ class ShellyRollerController:
 
 	def getHTTPResp(self, urlPath):
 		assert isinstance(urlPath, str)
+		assert not args.dryrun, "getHTTPResp should not be called at all when in the dry run mode"
 		resp = None
-		if args.dryrun:
-			assert shellyRollerControllerEmulator is not None
-			resp = shellyRollerControllerEmulator.getState()
-		else:
-			connectionTry = 0
-			targetUrl = 'http://' + self.IP + urlPath
-			try:
-				while connectionTry < CONNECTIONSMAXRETRIES:
-					try:
-						connectionTry += 1
-						time.sleep((connectionTry-1)*CONNECTIONSRETRYTIMESTEPSECS)
-						logger.debug("Roller %s: Connecting (try %s): %s", self, connectionTry, targetUrl)
-						resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
-						break
-					except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
-						logger.warn("Roller %s: Failed to connect - retrying: %s", self, e)
-			except requests.exceptions.RequestException as e:
-				logger.error("Roller %s: Failed to connect to %s", self, e)
+		connectionTry = 0
+		targetUrl = 'http://' + self.IP + urlPath
+		try:
+			while connectionTry < CONNECTIONSMAXRETRIES:
+				try:
+					connectionTry += 1
+					time.sleep((connectionTry-1)*CONNECTIONSRETRYTIMESTEPSECS)
+					logger.debug("Roller %s: Connecting (try %s): %s", self, connectionTry, targetUrl)
+					resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
+					break
+				except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
+					logger.warn("Roller %s: Failed to connect - retrying: %s", self, e)
+		except requests.exceptions.RequestException as e:
+			logger.error("Roller %s: Failed to connect to %s", self, e)
 		return resp
 
 	def getState(self):
@@ -270,6 +269,7 @@ class ShellyRollerController:
 		logger.info("Roller %s: Processing request to set rollers to the desired state %s", self, pos)
 		if int(state['current_pos']) == pos:
 			logger.debug("Roller %s: Already in the desired state", self)
+			return state
 		else:
 			if pos > 0 and pos <= 10:
 				# for correct tilt of roller one needs to shut them first and then open to the target
@@ -279,18 +279,24 @@ class ShellyRollerController:
 					logger.info("Roller %s: Preparing rollers by closing them first", self)
 					if args.dryrun:
 						assert shellyRollerControllerEmulator is not None
-						resp = shellyRollerControllerEmulator.setPos(pos)
+						resp = shellyRollerControllerEmulator.setPos(0)
 					else:
 						resp = self.getHTTPResp(self.setPosURL() + '0')
 					self.waitUntilStopGetState()
-			# now we can always set the desired state
+			# now we can set the desired state
 			logger.info("Roller %s: Setting rollers to the desired state: %s", self, pos)
 			if args.dryrun:
 				assert shellyRollerControllerEmulator is not None
-				resp = shellyRollerControllerEmulator.getState()
+				resp = shellyRollerControllerEmulator.setPos(pos)
 			else:
 				resp = self.getHTTPResp(self.setPosURL() + str(pos))
-				self.waitUntilStopGetState()
+				if resp.status_code != 200:
+					logger.error('Roller %s: Unable to set state ... received return code %s', self, resp.status_code)
+					resp = None
+				else:
+					resp = self.waitUntilStopGetState()
+					resp = resp.json()
+				return resp
 
 	# this is for the scheduled events to minimize interference
 	def setPosIfNotWindy(self, pos):
