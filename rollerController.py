@@ -204,10 +204,13 @@ class ShellyRollerController:
 
 		self.mainThread = threading.Thread(target=self.rollerMainThread)
 		self.mainThread.start()
-		logger.info("Roller thread started for {nameIP}".format(nameIP=self.getNameIP()))
+		logger.info("Roller %s: Roller thread started", self)
 
 	def getNameIP(self):
 		return str(self.name + '/' + self.IP)
+
+	def __str__(self):
+		return self.getNameIP()
 
 	def getHTTPResp(self, urlPath):
 		assert isinstance(urlPath, str)
@@ -223,13 +226,13 @@ class ShellyRollerController:
 					try:
 						connectionTry += 1
 						time.sleep((connectionTry-1)*CONNECTIONSRETRYTIMESTEPSECS)
-						logger.debug("Connecting to " + self.getNameIP() + " (try " + str(connectionTry) + "): " + targetUrl)
+						logger.debug("Roller %s: Connecting (try %s): %s", self, connectionTry, targetUrl)
 						resp = requests.get(targetUrl, auth=HTTPBasicAuth(self.authUserName, self.authPassword))
 						break
 					except (requests.exceptions.ConnectionError, requests.exceptions.ConnectTimeout) as e:
-						logger.warn("Failed to connect to " + self.getNameIP() + " - retrying: " + str(e))
+						logger.warn("Roller %s: Failed to connect - retrying: %s", self, e)
 			except requests.exceptions.RequestException as e:
-				logger.error("Failed to connect to " + self.getNameIP() + ": " + str(e))
+				logger.error("Roller %s: Failed to connect to %s", self, e)
 		return resp
 
 	def getState(self):
@@ -240,7 +243,7 @@ class ShellyRollerController:
 		else:
 			resp = self.getHTTPResp('/roller/0/state')
 			if resp.status_code != 200:
-				logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
+				logger.error('Roller %s: Unable to get state ... received return code %s', self, resp.status_code)
 				return None
 			else:
 				return resp.json()
@@ -264,33 +267,29 @@ class ShellyRollerController:
 			state = shellyRollerControllerEmulator.getState()
 		else:
 			state = self.getStoppedState()
-		logger.info("Processing request to set rollers to the desired state: " + str(pos))
+		logger.info("Roller %s: Processing request to set rollers to the desired state %s", self, pos)
 		if int(state['current_pos']) == pos:
-			logger.debug("Roller is already in the desired state")
+			logger.debug("Roller %s: Already in the desired state", self)
 		else:
 			if pos > 0 and pos <= 10:
 				# for correct tilt of roller one needs to shut them first and then open to the target
 				if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
-					logger.debug("No need to prepare rollers by closing them first")
+					logger.debug("Roller %s: No need to prepare rollers by closing them first", self)
 				else:
-					logger.info("Preparing rollers by closing them first")
+					logger.info("Roller %s: Preparing rollers by closing them first", self)
 					if args.dryrun:
 						assert shellyRollerControllerEmulator is not None
 						resp = shellyRollerControllerEmulator.setPos(pos)
 					else:
 						resp = self.getHTTPResp(self.setPosURL() + '0')
-						if resp.status_code != 200:
-							logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 					self.waitUntilStopGetState()
 			# now we can always set the desired state
-			logger.info("Setting rollers to the desired state: " + str(pos))
+			logger.info("Roller %s: Setting rollers to the desired state: %s", self, pos)
 			if args.dryrun:
 				assert shellyRollerControllerEmulator is not None
 				resp = shellyRollerControllerEmulator.getState()
 			else:
 				resp = self.getHTTPResp(self.setPosURL() + str(pos))
-				if resp.status_code != 200:
-					logger.error('Unable to get state for roller ' + self.getNameIP + ' ... received return code ' + str(resp.status_code))
 				self.waitUntilStopGetState()
 
 	# this is for the scheduled events to minimize interference
@@ -298,7 +297,9 @@ class ShellyRollerController:
 		assert isinstance(pos, int)
 		assert pos >= 0 and pos <= 100
 		try:
+			logger.debug("Roller %s: Acquiring lock to set state if not windy/sunny", self)
 			self.savedStateLock.acquire()
+			logger.debug("Roller %s: Acquired lock to set state if not windy/sunny", self)
 			if self.savedState is not None:
 				self.setPos(pos)
 			else:
@@ -306,11 +307,12 @@ class ShellyRollerController:
 				self.savedState = pos
 		finally:
 			self.savedStateLock.release()
+			logger.debug("Roller %s: Released lock after setting state if not windy/sunny", self)
 
 	def requestShutdown(self):
 		self.shutdownRequested = True
 		self.mainThread.join()
-		logger.info("Roller thread stopped for " + self.getNameIP())
+		logger.info("Roller %s: Roller thread stopped", self)
 
 	def rollerMainThread(self):
 		while not self.shutdownRequested:
@@ -329,11 +331,11 @@ class ShellyRollerController:
 					elif request.action == ShellyRollerControllerRequestWindType.RESTORE:
 						self.restoreState()
 					else:
-						logger.error('Got unknown wind request: ' + str(request))
+						logger.error('Roller %s: Got unknown wind request: ', self, request)
 				elif isinstance(request, ShellyRollerControllerRequestEvent):
 					self.setPos(request.targetPos)
 				else:
-					logger.error('Got unknown request type: ' + str(request) + ' is of type ' + str(type(request)))
+					logger.error('Roller %s: Got unknown request type: %s is of type %s', self, request, type(request))
 			except Queue.Empty:
 				pass
 
@@ -347,64 +349,80 @@ class ShellyRollerController:
 	def saveState(self):
 		# wait until roller gets into stabilized state
 		try:
+			logger.debug("Roller %s: Acquiring lock to save state", self)
 			self.savedStateLock.acquire()
+			logger.debug("Roller %s: Acquired lock to save state", self)
 			state = self.waitUntilStopGetState()
 			# XXX review this after we enabled closing due to sun/temp: save state if not open or closed
 			if int(state['current_pos']) not in (0, 100):
 				self.savedState = state
 		finally:
 			self.savedStateLock.release()
+			logger.debug("Roller %s: Released lock after saving state", self)
 	
 	def overrideSavedStatePos(self, pos):
 		assert isinstance(pos, int)
 		try:
+			logger.debug("Roller %s: Acquiring lock to override state", self)
 			self.savedStateLock.acquire()
+			logger.debug("Roller %s: Acquired lock to override state", self)
 			if self.savedState is not None:
 				self.savedState['current_pos'] = pos
 		finally:
 			self.savedStateLock.release()
+			logger.debug("Roller %s: Released lock after overriding state", self)
 
 	def restoreState(self):
 		try:
+			logger.debug("Roller %s: Acquiring lock to restore state", self)
 			self.savedStateLock.acquire()
+			logger.debug("Roller %s: Acquired lock to restore state", self)
 			if self.savedState is not None:
 				currentState = self.getState()
 				assert self.restorePos is not None
 				if int(currentState['current_pos']) == self.restorePos:
+					logger.info("Roller %s: Restoring position to %s", self, int(self.savedState['current_pos']))
 					self.setPos(self.savedState['current_pos'])
-					self.savedState = None
-					self.restorePos = None
 				else:
-					logger.info("Not restoring the state as the roller was moved in the meantime - expected "
-						+ str(self.restorePos) + " state, got " + str(int(currentState['current_pos'])))
+					logger.info("Roller %s: Not restoring the state as the roller was moved in the meantime - expected %s state, got %s", self, self.restorePos, int(currentState['current_pos']))
+				self.savedState = None
+				self.restorePos = None
+			else:
+				logger.warn("Roller %s: no saved state to restore", self)
 		finally:
 			self.savedStateLock.release()
+			logger.debug("Roller %s: Released lock after restoring state", self)
 
 	def submitRequest(self, request):
-		assert isinstance(request, ShellyRollerControllerRequest), "Request shall be ShellyRollerControllerRequest type, got " + str(type(request))
+		assert isinstance(request, ShellyRollerControllerRequest), "Roller %s: Request shall be ShellyRollerControllerRequest type, got %s" % (self, type(request))
 		try:
+			logger.debug("Roller %s: Acquiring lock to submit request", self)
 			self.savedStateLock.acquire()
+			logger.debug("Roller %s: Acquired lock to submit request", self)
 			if self.savedState is None:
-				logger.debug("Roller ", self, ": submitting request ", request)
+				logger.debug("Roller %s: submitting request %s", self, request)
 				try:
 					self.requestQueue.put(request, block=True, timeout=2)
 				except Queue.Full:
-					logger.warn("Request queue for roller is full - not submitting request " + str(request))
+					logger.warn("Roller %s: request queue for roller is full - not submitting request %s", self, request)
 			else:
 				if isinstance(request, ShellyRollerControllerRequestEvent):
-					logger.debug("Roller " + str(self) + ": modifying restore state to " + str(request.targetPos))
+					logger.debug("Roller %s: modifying restore state to %s", self, request.targetPos)
 					self.overrideSavedStatePos(request.targetPos)
 				else:
-					logger.warn("Received wind-/sun-related request while savedState == True - not submitting request " + str(request) )
+					logger.warn("Roller %s: received wind-/sun-related request while savedState == True - not submitting request %s", self, request)
 		finally:
 			self.savedStateLock.release()
+			logger.debug("Roller %s: Released lock to submit request", self)
 
 avgWindThreshold = 40.0
 avgGustThreshold = 70.0
+windRestoreCoefficiet = 0.7
 timeOpenThresholdMinutes = 10
 timeRestoreThresholdMinutes = 30
 closeAtTemperatureAtAnyAzimuth = 30
 closeAtTemperatureAtDirectSunlight = 25
+temperatureRestoreCoefficient = 0.9
 
 gaugeFile = '/tmp/gauge-data.txt'
 sleepTime = 60
@@ -427,7 +445,7 @@ rollers = collections.deque()
 with open(args.configFile) as configFile:
 	config = json.load(configFile)
 	if "thresholds" in config:
-		for k in ('avgWindThreshold', 'avgGustThreshold', 'timeOpenThresholdMinutes', 'timeRestoreThresholdMinutes', 'closeAtTemperatureAtAnyAzimuth', 'closeAtTemperatureAtDirectSunlight'):
+		for k in ('avgWindThreshold', 'avgGustThreshold', 'windRestoreCoefficiet', 'timeOpenThresholdMinutes', 'timeRestoreThresholdMinutes', 'closeAtTemperatureAtAnyAzimuth', 'closeAtTemperatureAtDirectSunlight', 'temperatureRestoreCoefficient'):
 			exec(k + " = config['thresholds'].get('" + k + "', " + k + ")")
 	if "rollers" in config:
 		for roller in config['rollers']:
@@ -467,15 +485,18 @@ class SlidingMonitor:
 
 	def isFull(self):
 		if len(self.container) == self.container.maxlen:
-			logger.debug("Measurement queue is already filled with data")
+			logger.debug("Measurement queue %s: already filled with data", self)
 			return True
 		else:
-			logger.debug("Measurement queue is not yet filled with data")
+			logger.debug("Measurement queue %s: not yet filled with data", self)
 			return False
 
 wlatestMonitor = SlidingMonitor()
+logger.debug("Measurement queue %s: instantiated as wlatestMonitor", wlatestMonitor)
 wgustMonitor = SlidingMonitor()
+logger.debug("Measurement queue %s: instantiated as wgustMonitor", wgustMonitor)
 tempMonitor = SlidingMonitor()
+logger.debug("Measurement queue %s: instantiated as tempMonitor", tempMonitor)
 
 scheduler = BackgroundScheduler(daemon=True, timezone=config['location']['timezone'], job_defaults={'misfire_grace_time': 5*60})
 
@@ -625,8 +646,6 @@ def main_code():
 	if args.testRollers:
 		scheduler.add_job(logDebugScheduledJobList, 'interval', seconds=5)
 		# this is to test movement of rollers
-		#logger.debug("ShellyRollerControllerRequestWindType.CLOSE is of type " + str(type(ShellyRollerControllerRequestWindType.CLOSE)) + " and repr is " + repr(ShellyRollerControllerRequestWindType.CLOSE))
-		scheduleDateJob(lambda: [r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=1))
 		scheduleDateJob(lambda: [r.submitRequest(ShellyRollerControllerRequestEvent(15)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=15))
 		scheduleDateJob(lambda: [r.submitRequest(ShellyRollerControllerRequestEvent(2)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=35))
 		scheduleDateJob(lambda: [r.submitRequest(ShellyRollerControllerRequestEvent(5)) for r in rollers], datetime.datetime.now() + datetime.timedelta(seconds=55))
