@@ -5,6 +5,8 @@
          "IP":"192.168.1.2",
          "rollerUsername":"user",
          "rollerPassword":"password"
+         "solarAzimuthMin":160,
+         "solarAzimuthMax":320
       }
    ],
    "WeeWxGaugeFile":{
@@ -15,8 +17,12 @@
    "thresholds":{
       "avgWindThreshold":4.9,
       "avgGustThreshold":70.0,
+      "windRestoreCoefficiet":0.7,
       "timeOpenThresholdMinutes":1,
       "timeRestoreThresholdMinutes":2
+      "closeAtTemperatureAtAnyAzimuth":25,
+      "closeAtTemperatureAtDirectSunlight":18,
+      "temperatureRestoreCoefficient":0.9
    },
    "location":{
       "latitude":54.32,
