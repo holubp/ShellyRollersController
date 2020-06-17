@@ -804,7 +804,7 @@ def main_code():
 								wasClosedDueToTempAndSunAzimuth[r] = False
 								datetimeLastMovedWindSun = datetime.datetime.now()
 
-				elif solarElevation >= 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) > 0:
+				elif solarElevation < 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) > 0 and timeDiffMinutes >= timeRestoreThresholdMinutes:
 					for r in rollers:
 						if wasClosedDueToTempAndSunAzimuth[r]:
 							logger.info("Restoring roller " + str(r) + " no direct sunlight anymore - sun below horizon")
