@@ -667,17 +667,16 @@ def main_code():
 	scheduler.start()
 	logInfoScheduledJobList()
 	while True:
-		#sunParams = astral.sun.sun(astralCity.observer, date=datetime.datetime.now(), tzinfo=pytz.timezone(astralCity.timezone))
-		# cycle invariants
-		assert sum([wasOpened, wasClosedDueToTemp]) <= 1
+		# cycle invariants - intentionaly outside of try/catch block, so that the program terminates if invariants are violated
+		assert sum([wasOpened, wasClosedDueToTemp]) <= 1, "wasOpened and wasClosedDueToTemp are mutually exclusive - wasOpen has higher priority. wasOpened={}, wasClosedDueToTemp={}".format(wasOpened, wasClosedDueToTemp)
 		if sum(wasClosedDueToTempAndSunAzimuth.values()) > 0:
-			assert sum([wasOpened, wasClosedDueToTemp]) == 0
+			assert sum([wasOpened, wasClosedDueToTemp]) == 0, "When one of the wasClosedDueToTempAndSunAzimuth is set, wasOpened and wasClosedDueToTempAndSunAzimuth must not be set as these are preceding in priority. wasOpened={}, wasClosedDueToTemp={}, sum(wasClosedDueToTempAndSunAzimuth.values())={}".format(wasOpened, wasClosedDueToTemp, sum(wasClosedDueToTempAndSunAzimuth.values()))
 		if sum([wasOpened, wasClosedDueToTemp]) > 0:
-			assert sum(wasClosedDueToTempAndSunAzimuth.values()) == 0
+			assert sum(wasClosedDueToTempAndSunAzimuth.values()) == 0, "When one of the wasOpened and wasClosedDueToTempAndSunAzimuth is set, wasClosedDueToTempAndSunAzimuth must not be set as these are preceding in priority. wasOpened={}, wasClosedDueToTemp={}, sum(wasClosedDueToTempAndSunAzimuth.values())={}".format(wasOpened, wasClosedDueToTemp, sum(wasClosedDueToTempAndSunAzimuth.values()))
 		if sum([wasOpened, wasClosedDueToTemp]) == 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) == 0:
-			assert datetimeLastMovedWindSun is None
+			assert datetimeLastMovedWindSun is None, "datetimeLastMovedWindSun must be None when none of wasOpened, wasClosedDueToTemp] and sum(wasClosedDueToTempAndSunAzimuth.values() is set"
 		else:
-			assert datetimeLastMovedWindSun is not None
+			assert datetimeLastMovedWindSun is not None, "datetimeLastMovedWindSun must not be None when any of wasOpened, wasClosedDueToTemp] and sum(wasClosedDueToTempAndSunAzimuth.values() are set"
 
 
 		try:
@@ -793,12 +792,12 @@ def main_code():
 							" r.solarAzimuthMin=" + str(r.solarAzimuthMin) +
 							" r.solarAzimuthMax=" + str(r.solarAzimuthMax) +
 							" wasClosedDueToTempAndSunAzimuth[r]=" + str(wasClosedDueToTempAndSunAzimuth[r]))
-							if solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax and not wasClosedDueToTempAndSunAzimuth[r]:
+							if r.solarAzimuthMin <= solarAzimuth <= r.solarAzimuthMax and not wasClosedDueToTempAndSunAzimuth[r]:
 								logger.info("Closing roller " + str(r) + " due to direct sunlight")
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE))
 								wasClosedDueToTempAndSunAzimuth[r] = True
 								datetimeLastMovedWindSun = datetime.datetime.now()
-							elif not (solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax) and wasClosedDueToTempAndSunAzimuth[r]:
+							elif not (r.solarAzimuthMin <= solarAzimuth <= r.solarAzimuthMax) and wasClosedDueToTempAndSunAzimuth[r]:
 								logger.info("Restoring roller " + str(r) + " no direct sunlight anymore - sun out of the affected angle")
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 								wasClosedDueToTempAndSunAzimuth[r] = False
@@ -813,28 +812,46 @@ def main_code():
 							datetimeLastMovedWindSun = datetime.datetime.now()
 
 			# restore of rollers due to temperature is implemented if wind-based decisions are not interfering and done regardless if done on individual or collective basis
-			if tempMonitor.isFull() and not wasOpened:
-				if tempMonitor.getAvg() < temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight:
-					logger.debug("Conditions met to restore rollers due to temperature")
-					if (wasClosedDueToTemp or sum(wasClosedDueToTempAndSunAzimuth.values()) > 0) and timeDiffMinutes >= timeRestoreThresholdMinutes:
-						logger.debug("Conditions match to restore roller " + str(r) + " due to decreased temperature:" +
-							" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
-							" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
-							" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
-							" sum(wasClosedDueToTempAndSunAzimuth.values())=" + sum(wasClosedDueToTempAndSunAzimuth.values()) +
-							" timeDiffMinutes=" + str(timeDiffMinutes) +
-							" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes))
-						logger.info("Restoring rollers  due to decreased temperature")
-						if (wasClosedDueToTemp):
-						 	for r in rollers:
-								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
-						else:
-							for r in rollers:
-								if wasClosedDueToTempAndSunAzimuth[r]:
-									r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
-						datetimeLastMovedWindSun = datetime.datetime.now()
-						wasClosedDueToTemp = False
+			if tempMonitor.isFull() and not wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
+				if tempMonitor.getAvg() < temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight and (wasClosedDueToTemp or sum(wasClosedDueToTempAndSunAzimuth.values()) > 0):
+					logger.debug("Conditions match to restore roller " + str(r) + " due to decreased temperature:" +
+						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+						" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
+						" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
+						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + sum(wasClosedDueToTempAndSunAzimuth.values()) +
+						" timeDiffMinutes=" + str(timeDiffMinutes) +
+						" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes))
+					logger.info("Restoring rollers  due to decreased temperature")
+					if (wasClosedDueToTemp):
 						for r in rollers:
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+					else:
+						for r in rollers:
+							if wasClosedDueToTempAndSunAzimuth[r]:
+								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+					datetimeLastMovedWindSun = datetime.datetime.now()
+					wasClosedDueToTemp = False
+					for r in rollers:
+						wasClosedDueToTempAndSunAzimuth[r] = False
+
+				# Reopen non-affected windows if temperature drops, but keep the one directly sunlit shut
+				elif  temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight <= tempMonitor.getAvg() < tempMonitor.getAvg() < closeAtTemperatureAtAnyAzimuth and wasClosedDueToTemp and solarElevation >= 0:
+					logger.debug("Conditions match to restore roller " + str(r) + " due to decreased temperature while sun still shines on some windows:" +
+						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+						" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
+						" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
+						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + sum(wasClosedDueToTempAndSunAzimuth.values()) +
+						" timeDiffMinutes=" + str(timeDiffMinutes) +
+						" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes) +
+						" solarElevation=" + str(solarElevation))
+					wasClosedDueToTemp = False
+					for r in rollers:
+						if r.solarAzimuthMin <= solarAzimuth <= r.solarAzimuthMax:
+							log.debug("Roller {} has r.solarAzimuthMin={} r.solarAzimuthMax={}. Solar azimuth is {}".format(r, r.solarAzimuthMin, r.solarAzimuthMax, solarAzimuth))
+							log.info("Not restoring roller {} as it is directly sunlit.".format(r))
+							wasClosedDueToTempAndSunAzimuth[r] = True
+						else:
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 							wasClosedDueToTempAndSunAzimuth[r] = False
 
 
