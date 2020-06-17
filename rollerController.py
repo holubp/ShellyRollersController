@@ -758,7 +758,7 @@ def main_code():
 					" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
 					" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
 					" solarElevation=" + str(solarElevation))
-				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth and solarElevation >= 0:
+				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth:
 					logger.debug("Conditions met to close rollers due to temperature")
 					if not wasClosedDueToTemp:
 						# this is safety so that we don't open the rollers too often
@@ -780,7 +780,7 @@ def main_code():
 
 			# directional temperature-based decisions for individual rollers are only implemented if wind-based decisions are not interfering and if the global temperature-based control is not in place
 			if tempMonitor.isFull() and not wasOpened and not wasClosedDueToTemp:
-				if tempMonitor.getAvg() >= closeAtTemperatureAtDirectSunlight and solarElevation >= 0 and not wasClosedDueToTemp:
+				if tempMonitor.getAvg() >= closeAtTemperatureAtDirectSunlight and solarElevation >= 0:
 					logger.debug("Conditions met to close rollers due to temperature and sunshine direction")
 					solarAzimuth = int(city.solar_azimuth(datetime.datetime.now()))
 					# this is safety so that we don't open the rollers too often
@@ -798,8 +798,21 @@ def main_code():
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE))
 								wasClosedDueToTempAndSunAzimuth[r] = True
 								datetimeLastMovedWindSun = datetime.datetime.now()
+							elif not (solarAzimuth >= r.solarAzimuthMin and solarAzimuth <= r.solarAzimuthMax) and wasClosedDueToTempAndSunAzimuth[r]:
+								logger.info("Restoring roller " + str(r) + " no direct sunlight anymore - sun out of the affected angle")
+								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+								wasClosedDueToTempAndSunAzimuth[r] = False
+								datetimeLastMovedWindSun = datetime.datetime.now()
 
-			# restore of rollers due to sun is implemented if wind-based decisions are not interfering and done regardless if done on individual or collective basis
+				elif solarElevation >= 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) > 0:
+					for r in rollers:
+						if wasClosedDueToTempAndSunAzimuth[r]:
+							logger.info("Restoring roller " + str(r) + " no direct sunlight anymore - sun below horizon")
+							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+							wasClosedDueToTempAndSunAzimuth[r] = False
+							datetimeLastMovedWindSun = datetime.datetime.now()
+
+			# restore of rollers due to temperature is implemented if wind-based decisions are not interfering and done regardless if done on individual or collective basis
 			if tempMonitor.isFull() and not wasOpened:
 				if tempMonitor.getAvg() < temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight:
 					logger.debug("Conditions met to restore rollers due to temperature")
@@ -812,12 +825,18 @@ def main_code():
 							" timeDiffMinutes=" + str(timeDiffMinutes) +
 							" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes))
 						logger.info("Restoring rollers  due to decreased temperature")
-						for r in rollers:
-							r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+						if (wasClosedDueToTemp):
+						 	for r in rollers:
+								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
+						else:
+							for r in rollers:
+								if wasClosedDueToTempAndSunAzimuth[r]:
+									r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.RESTORE))
 						datetimeLastMovedWindSun = datetime.datetime.now()
 						wasClosedDueToTemp = False
 						for r in rollers:
 							wasClosedDueToTempAndSunAzimuth[r] = False
+
 
 		except WeeWxReadoutError as e:
 			logger.debug(e.message)
