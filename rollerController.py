@@ -166,7 +166,7 @@ class ShellyRollerControllerEmulator:
 		logger.debug("ShellyRollerControllerEmulator %s: setting position to %s", self, pos)
 		if self.state['current_pos'] < pos:
 			self.state['last_direction'] = "open"
-		if self.state['current_pos'] > pos:
+		elif self.state['current_pos'] > pos:
 			self.state['last_direction'] = "close"
 		# don't touch when already in the position
 		self.state['current_pos'] = pos
@@ -179,6 +179,9 @@ class ShellyRollerControllerEmulator:
 shellyRollerControllerEmulator = None
 if args.dryrun:
 	shellyRollerControllerEmulator = ShellyRollerControllerEmulator()
+
+class ShellyRollerControllerException(Exception):
+	pass
 
 class ShellyRollerController:
 
@@ -235,24 +238,20 @@ class ShellyRollerController:
 		return resp
 
 	def getState(self):
+		state = None
 		if args.dryrun:
 			assert shellyRollerControllerEmulator is not None
-			resp = shellyRollerControllerEmulator.getState()
-			return resp
+			state = shellyRollerControllerEmulator.getState()
 		else:
 			resp = self.getHTTPResp('/roller/0/state')
 			if resp.status_code != 200:
-				logger.error('Roller %s: Unable to get state ... received return code %s', self, resp.status_code)
-				return None
+				raise ShellyRollerControllerException('Roller %s: Unable to get state ... received HTTP return code %s' % (self, resp.status_code))
 			else:
-				return resp.json()
-
-	def getStoppedState(self):
-		state = self.waitUntilStopGetState()
+				state = resp.json()
 		return state
 
 	def getPos(self):
-		state = self.getStoppedState()
+		state = self.waitUntilStopGetState()
 		return int(state['current_pos'])
 
 	def setPosURL(self):
@@ -265,38 +264,46 @@ class ShellyRollerController:
 			assert shellyRollerControllerEmulator is not None
 			state = shellyRollerControllerEmulator.getState()
 		else:
-			state = self.getStoppedState()
+			state = self.waitUntilStopGetState()
 		logger.info("Roller %s: Processing request to set rollers to the desired state %s", self, pos)
-		if int(state['current_pos']) == pos:
-			logger.debug("Roller %s: Already in the desired state", self)
-			return state
-		else:
-			if pos > 0 and pos <= 10:
-				# for correct tilt of roller one needs to shut them first and then open to the target
-				if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
-					logger.debug("Roller %s: No need to prepare rollers by closing them first", self)
-				else:
-					logger.info("Roller %s: Preparing rollers by closing them first", self)
-					if args.dryrun:
-						assert shellyRollerControllerEmulator is not None
-						resp = shellyRollerControllerEmulator.setPos(0)
-					else:
-						resp = self.getHTTPResp(self.setPosURL() + '0')
-					self.waitUntilStopGetState()
-			# now we can set the desired state
-			logger.info("Roller %s: Setting rollers to the desired state: %s", self, pos)
-			if args.dryrun:
-				assert shellyRollerControllerEmulator is not None
-				resp = shellyRollerControllerEmulator.setPos(pos)
+		try:
+			if int(state['current_pos']) == pos:
+				logger.debug("Roller %s: Already in the desired state", self)
+				return state
 			else:
-				resp = self.getHTTPResp(self.setPosURL() + str(pos))
-				if resp.status_code != 200:
-					logger.error('Roller %s: Unable to set state ... received return code %s', self, resp.status_code)
-					resp = None
+				if pos > 0 and pos <= 10:
+					# for correct tilt of roller one needs to shut them first and then open to the target
+					if int(state['current_pos']) < pos and str(state['last_direction']) == "open" and str(state['stop_reason']) == "normal" and state['is_valid']:
+						logger.debug("Roller %s: No need to prepare rollers by closing them first", self)
+					else:
+						logger.info("Roller %s: Preparing rollers by closing them first", self)
+						if args.dryrun:
+							assert shellyRollerControllerEmulator is not None
+							resp = shellyRollerControllerEmulator.setPos(0)
+						else:
+							resp = self.getHTTPResp(self.setPosURL() + '0')
+							if resp.status_code != 200:
+								raise ShellyRollerControllerException('Roller %s: Unable to set position 0 while preparing rollers by closing them first ... received HTTP return code %s' % (self, resp.status_code))
+						state = self.waitUntilStopGetState()
+						if int(state['current_pos']) != 0:
+							raise ShellyRollerControllerException('Roller %s: Unable to set position 0 while preparing rollers by closing them first ... final position is %s' % (self, state['current_pos']))
+				# now we can set the desired state
+				logger.info("Roller %s: Setting rollers to the desired state: %s", self, pos)
+				if args.dryrun:
+					assert shellyRollerControllerEmulator is not None
+					resp = shellyRollerControllerEmulator.setPos(pos)
 				else:
-					resp = self.waitUntilStopGetState()
-					resp = resp.json()
-				return resp
+					resp = self.getHTTPResp(self.setPosURL() + str(pos))
+					state = None
+					if resp.status_code != 200:
+						raise ShellyRollerControllerException('Roller %s: Unable to set position %s ... received HTTP return code %s' % (self, pos, resp.status_code))
+				state = self.waitUntilStopGetState()
+				if int(state['current_pos']) != pos:
+					raise ShellyRollerControllerException('Roller %s: Unable to set position %s ... final position is %s' % (self, pos, state['current_pos']))
+				return state
+		except ShellyRollerControllerException as e:
+			logger.error(e.message)
+			return None
 
 	# this is for the scheduled events to minimize interference
 	def setPosIfNotWindy(self, pos):
@@ -337,11 +344,13 @@ class ShellyRollerController:
 					elif request.action == ShellyRollerControllerRequestWindType.RESTORE:
 						self.__restoreState()
 					else:
-						logger.error('Roller %s: Got unknown wind request: ', self, request)
+						logger.error('Roller %s: Got unknown wind request: %s', self, request)
 				elif isinstance(request, ShellyRollerControllerRequestEvent):
 					self.setPos(request.targetPos)
 				else:
 					logger.error('Roller %s: Got unknown request type: %s is of type %s', self, request, type(request))
+			except ShellyRollerControllerException as e:
+				logger.error('Roller %s: Failed to process %s: %s', self, request, e.message)
 			except Queue.Empty:
 				pass
 
@@ -397,6 +406,8 @@ class ShellyRollerController:
 				self.lastWindTempPos = None
 			else:
 				logger.warn("Roller %s: no saved state to restore", self)
+		except ShellyRollerControllerException as e:
+			logger.error("Failed to restore position: " + e.message)
 		finally:
 			self.__savedStateLock.release()
 			logger.debug("Roller %s: Released lock after restoring state", self)
@@ -632,7 +643,7 @@ def requestPositionAllRollers(pos):
 			logger.debug("Setting state of roller " + str(r) + ". Target pos is " + str(pos))
 			r.submitRequest(ShellyRollerControllerRequestEvent(pos))
 
-class WeeWxReadoutError(Exception):
+class WeeWxReadoutException(Exception):
 	pass
 
 def main_code():
@@ -684,7 +695,7 @@ def main_code():
 				data = json.load(gaugeFile_json)
 				assert data['windunit'] == 'km/h'
 				if lastDate != "" and lastDate == data['date']:
-					raise WeeWxReadoutError("Gauge hasn't been updated during the last readout period - ignoring")
+					raise WeeWxReadoutException("Gauge hasn't been updated during the last readout period - ignoring")
 				else:
 					lastDate = data['date']
 					try:
@@ -750,15 +761,14 @@ def main_code():
 			# temperature-based decisions are only implemented if wind-based decisions are not interfering
 			if tempMonitor.isFull() and not wasOpened:
 				solarElevation = int(city.solar_elevation(datetime.datetime.now()))
-				logger.debug("Checking temperature-based roller control:" +
-					" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
-					" closeAtTemperatureAtAnyAzimuth=" + str(closeAtTemperatureAtAnyAzimuth) +
-					" closeAtTemperatureAtDirectSunlight=" + str(closeAtTemperatureAtDirectSunlight) +
-					" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
-					" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
-					" solarElevation=" + str(solarElevation))
 				if tempMonitor.getAvg() >= closeAtTemperatureAtAnyAzimuth:
-					logger.debug("Conditions met to close rollers due to temperature")
+					logger.debug("Conditions met to close rollers due to temperature" +
+						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
+						" closeAtTemperatureAtAnyAzimuth=" + str(closeAtTemperatureAtAnyAzimuth) +
+						" closeAtTemperatureAtDirectSunlight=" + str(closeAtTemperatureAtDirectSunlight) +
+						" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
+						" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
+						" solarElevation=" + str(solarElevation))
 					if not wasClosedDueToTemp:
 						# this is safety so that we don't open the rollers too often
 						logger.debug("Conditions met to close rollers due to temperature, not conflicting with the wind" +
@@ -855,7 +865,7 @@ def main_code():
 							wasClosedDueToTempAndSunAzimuth[r] = False
 
 
-		except WeeWxReadoutError as e:
+		except WeeWxReadoutException as e:
 			logger.debug(e.message)
 
 		except Exception as e:
