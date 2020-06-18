@@ -16,6 +16,7 @@ import collections
 import Queue
 from statistics import mean
 from enum import Enum
+import copy
 
 import threading
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -305,23 +306,6 @@ class ShellyRollerController:
 			logger.error(e.message)
 			return None
 
-	# this is for the scheduled events to minimize interference
-	def setPosIfNotWindy(self, pos):
-		assert isinstance(pos, int)
-		assert pos >= 0 and pos <= 100
-		try:
-			logger.debug("Roller %s: Acquiring lock to set state if not windy/sunny", self)
-			self.__savedStateLock.acquire()
-			logger.debug("Roller %s: Acquired lock to set state if not windy/sunny", self)
-			if self.__savedState is not None:
-				self.setPos(pos)
-			else:
-				# if the roller is up due to the wind, we set the restore position instead
-				self.__savedState = pos
-		finally:
-			self.__savedStateLock.release()
-			logger.debug("Roller %s: Released lock after setting state if not windy/sunny", self)
-
 	def requestShutdown(self):
 		self.shutdownRequested = True
 		self.mainThread.join()
@@ -370,11 +354,12 @@ class ShellyRollerController:
 			logger.debug("Roller %s: Acquired lock to save state", self)
 			# do not override already saved state
 			if self.__savedState == None:
-				self.__savedState = state
+				logger.debug("Roller %s: Saving state %s", self, state)
+				self.__savedState = copy.deepcopy(state)
 		finally:
 			self.__savedStateLock.release()
 			logger.debug("Roller %s: Released lock after saving state", self)
-	
+
 	def overrideSavedStatePos(self, pos):
 		assert isinstance(pos, int)
 		try:
@@ -382,6 +367,7 @@ class ShellyRollerController:
 			self.__savedStateLock.acquire()
 			logger.debug("Roller %s: Acquired lock to override state", self)
 			if self.__savedState is not None:
+				logger.debug("Roller %s: Overriding saved state position from %s to %s", self, self.__savedState['current_pos'], pos)
 				self.__savedState['current_pos'] = pos
 			else:
 				log.warn("Failed to override saved state position - no saved state available.")
@@ -428,6 +414,12 @@ class ShellyRollerController:
 				if isinstance(request, ShellyRollerControllerRequestEvent):
 					logger.debug("Roller %s: modifying restore state to %s", self, request.targetPos)
 					self.overrideSavedStatePos(request.targetPos)
+				elif isinstance(request, ShellyRollerControllerRequestWind) and request.action == ShellyRollerControllerRequestWindType.RESTORE:
+					logger.debug("Roller %s: submitting state restore request %s", self, request)
+					try:
+						self.requestQueue.put(request, block=True, timeout=2)
+					except Queue.Full:
+						logger.warn("Roller %s: request queue for roller is full - not submitting request %s", self, request)
 				else:
 					logger.warn("Roller %s: received wind-/sun-related request while __savedState == True - not submitting request %s", self, request)
 		finally:
