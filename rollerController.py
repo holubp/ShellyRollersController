@@ -6,6 +6,8 @@ from requests.auth import HTTPBasicAuth
 import requests.exceptions
 CONNECTIONSMAXRETRIES = 10
 CONNECTIONSRETRYTIMESTEPSECS = 1
+WEEWX_RESTART_CMD='/etc/init.d/weewx restart'
+WEEWX_STALE_READ_TIMEOUT_MINS=30
 
 import time
 import datetime
@@ -684,17 +686,30 @@ def main_code():
 
 		try:
 			with open(gaugeFile) as gaugeFile_json:
+				def parseWeeWxDate(data):
+					try:
+						dateNumeric = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
+						return dateFormat
+					except Exception as e:
+						logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
+						return None
+
 				data = json.load(gaugeFile_json)
 				assert data['windunit'] == 'km/h'
 				if lastDate != "" and lastDate == data['date']:
+					if parseWeeWxDate(data) <= datetime.datetime.now() - datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS):
+						logger.debug("Gauge is stale for too long, going to restart WeeWx: last update time {}, current time {}, maximum allowed time delta {}".format(parseWeeWxDate(data), datetime.datetime.now(), datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS)))
+						returned_value = os.system(WEEWX_RESTART_CMD)
+						if returned_value != 0:
+							logger.warn("Failed to restart WeeWx: restart command '{}' returned value {}".format(WEEWX_RESTART_CMD, returned_value))
+						else:
+							logger.warn("WeeWx restarted due to stale gauge file - last updated on {}".format(data['date']))
+
 					raise WeeWxReadoutException("Gauge hasn't been updated during the last readout period - ignoring")
 				else:
 					lastDate = data['date']
-					try:
-						lastDateNumeric = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
-						logger.debug("Last date numeric is " + str(lastDateNumeric))
-					except Exception as e:
-						logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
+					lastDateNumeric = parseWeeWxDate(data)
+
 				logger.debug("Storing wlatest " + data['wlatest'])
 				wlatestMonitor.append(float(data['wlatest']))
 				logger.debug("Storing wgust " + data['wgust'])
