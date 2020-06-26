@@ -688,27 +688,30 @@ def main_code():
 			with open(gaugeFile) as gaugeFile_json:
 				def parseWeeWxDate(data):
 					try:
-						dateNumeric = datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
-						return dateFormat
+						return datetime.datetime.strptime(data['date'], re.sub('([A-Za-z])', '%\\1', data['dateFormat']))
 					except Exception as e:
-						logger.error("Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e))
-						return None
+						error_msg = "Failed to parse measurement date: '" + data['date'] + "' with format '" + data['dateFormat'] + "'" + "\n" + str(e)
+						logger.error(error_msg)
+						raise WeeWxReadoutException(error_msg)
 
 				data = json.load(gaugeFile_json)
 				assert data['windunit'] == 'km/h'
-				if lastDate != "" and lastDate == data['date']:
-					if parseWeeWxDate(data) <= datetime.datetime.now() - datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS):
-						logger.debug("Gauge is stale for too long, going to restart WeeWx: last update time {}, current time {}, maximum allowed time delta {}".format(parseWeeWxDate(data), datetime.datetime.now(), datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS)))
-						returned_value = os.system(WEEWX_RESTART_CMD)
-						if returned_value != 0:
-							logger.warn("Failed to restart WeeWx: restart command '{}' returned value {}".format(WEEWX_RESTART_CMD, returned_value))
-						else:
-							logger.warn("WeeWx restarted due to stale gauge file - last updated on {}".format(data['date']))
+				try:
+					if lastDate != "" and lastDate == data['date']:
+						if parseWeeWxDate(data) <= datetime.datetime.now() - datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS):
+							logger.debug("Gauge is stale for too long, going to restart WeeWx: last update time {}, current time {}, maximum allowed time delta {}".format(parseWeeWxDate(data), datetime.datetime.now(), datetime.timedelta(minutes=WEEWX_STALE_READ_TIMEOUT_MINS)))
+							returned_value = os.system(WEEWX_RESTART_CMD)
+							if returned_value != 0:
+								logger.warn("Failed to restart WeeWx: restart command '{}' returned value {}".format(WEEWX_RESTART_CMD, returned_value))
+							else:
+								logger.warn("WeeWx restarted due to stale gauge file - last updated on {}".format(data['date']))
 
-					raise WeeWxReadoutException("Gauge hasn't been updated during the last readout period - ignoring")
-				else:
-					lastDate = data['date']
-					lastDateNumeric = parseWeeWxDate(data)
+						raise WeeWxReadoutException("Gauge hasn't been updated during the last readout period - ignoring")
+					else:
+						lastDate = data['date']
+						lastDateNumeric = parseWeeWxDate(data)
+				except WeeWxReadoutException as e:
+					raise WeeWxReadoutException("Failed to parse date from WeeWx gauge file: " + str(e))
 
 				logger.debug("Storing wlatest " + data['wlatest'])
 				wlatestMonitor.append(float(data['wlatest']))
