@@ -738,7 +738,7 @@ def main_code():
 					logger.debug("Wind is above the set threshold: wlatestMonitor.getAvg()={wl} avgWindThreshold={aWT} wgustMonitor.getAvg()={wg} avgGustThreshold={aGT}".format(wl=wlatestMonitor.getAvg(), aWT=avgWindThreshold, wg=wgustMonitor.getAvg(), aGT=avgGustThreshold))
 					if not wasOpened:
 						# this is safety so that we don't open the rollers too often
-						if timeDiffMinutes >= timeOpenThresholdMinutes:
+						if timeDiffMinutes is None or timeDiffMinutes >= timeOpenThresholdMinutes:
 							logger.info("Rising rollers because of wind")
 							wasOpened = True
 							wasClosedDueToTemp = False
@@ -759,7 +759,7 @@ def main_code():
 
 				# restoring is only done when the wind/gusts drop substantially - that is windRestoreCoefficiet time the thresholds
 				elif wasOpened and wlatestMonitor.getAvg() < windRestoreCoefficiet*avgWindThreshold and wgustMonitor.getAvg() < windRestoreCoefficiet*avgGustThreshold:
-					if timeDiffMinutes >= timeRestoreThresholdMinutes:
+					if timeDiffMinutes is None or timeDiffMinutes >= timeRestoreThresholdMinutes:
 						logger.info("Restoring rollers after wind died down")
 						wasOpened = False
 						for r in rollers:
@@ -786,7 +786,7 @@ def main_code():
 							" closeAtTemperatureAtAnyAzimuth=" + str(closeAtTemperatureAtAnyAzimuth) +
 							" wasOpened=" + str(wasOpened) +
 							" wasClosedDueToTemp=" + str(wasClosedDueToTemp))
-						if timeDiffMinutes >= timeOpenThresholdMinutes:
+						if timeDiffMinutes is None or timeDiffMinutes >= timeOpenThresholdMinutes:
 							for r in rollers:
 								r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.CLOSE))
 								wasClosedDueToTempAndSunAzimuth[r] = False
@@ -803,7 +803,7 @@ def main_code():
 					logger.debug("Conditions met to close rollers due to temperature and sunshine direction")
 					solarAzimuth = int(city.solar_azimuth(datetime.datetime.now()))
 					# this is safety so that we don't open the rollers too often
-					if timeDiffMinutes >= timeOpenThresholdMinutes:
+					if timeDiffMinutes is None or timeDiffMinutes >= timeOpenThresholdMinutes:
 						for r in rollers:
 							logger.debug("Conditions match to close roller " + str(r) + " due to direct sunlight:" +
 							" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
@@ -823,7 +823,7 @@ def main_code():
 								wasClosedDueToTempAndSunAzimuth[r] = False
 								datetimeLastMovedWindSun = datetime.datetime.now()
 
-				elif solarElevation < 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) > 0 and timeDiffMinutes >= timeRestoreThresholdMinutes:
+				elif solarElevation < 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) > 0 and (timeDiffMinutes is None or timeDiffMinutes >= timeRestoreThresholdMinutes):
 					for r in rollers:
 						if wasClosedDueToTempAndSunAzimuth[r]:
 							logger.info("Restoring roller " + str(r) + " no direct sunlight anymore - sun below horizon")
@@ -832,7 +832,7 @@ def main_code():
 							datetimeLastMovedWindSun = datetime.datetime.now()
 
 			# restore of rollers due to temperature is implemented if wind-based decisions are not interfering and done regardless if done on individual or collective basis
-			if tempMonitor.isFull() and not wasOpened and timeDiffMinutes >= timeRestoreThresholdMinutes:
+			if tempMonitor.isFull() and not wasOpened and (timeDiffMinutes is None or timeDiffMinutes >= timeRestoreThresholdMinutes):
 				if tempMonitor.getAvg() < temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight and (wasClosedDueToTemp or sum(wasClosedDueToTempAndSunAzimuth.values()) > 0):
 					logger.debug("Conditions match to restore roller " + str(r) + " due to decreased temperature:" +
 						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
