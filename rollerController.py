@@ -837,7 +837,7 @@ def main_code():
 						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
 						" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
 						" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
-						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + sum(wasClosedDueToTempAndSunAzimuth.values()) +
+						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + str(sum(wasClosedDueToTempAndSunAzimuth.values())) +
 						" timeDiffMinutes=" + str(timeDiffMinutes) +
 						" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes))
 					logger.info("Restoring rollers  due to decreased temperature")
@@ -859,7 +859,7 @@ def main_code():
 						" tempMonitor.getAvg()=" + str(tempMonitor.getAvg()) +
 						" temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight=" + str(temperatureRestoreCoefficient*closeAtTemperatureAtDirectSunlight) +
 						" wasClosedDueToTemp=" + str(wasClosedDueToTemp) +
-						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + sum(wasClosedDueToTempAndSunAzimuth.values()) +
+						" sum(wasClosedDueToTempAndSunAzimuth.values())=" + str(sum(wasClosedDueToTempAndSunAzimuth.values())) +
 						" timeDiffMinutes=" + str(timeDiffMinutes) +
 						" timeRestoreThresholdMinutes=" + str(timeRestoreThresholdMinutes) +
 						" solarElevation=" + str(solarElevation))
