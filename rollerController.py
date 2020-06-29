@@ -678,10 +678,9 @@ def main_code():
 			assert sum([wasOpened, wasClosedDueToTemp]) == 0, "When one of the wasClosedDueToTempAndSunAzimuth is set, wasOpened and wasClosedDueToTempAndSunAzimuth must not be set as these are preceding in priority. wasOpened={}, wasClosedDueToTemp={}, sum(wasClosedDueToTempAndSunAzimuth.values())={}".format(wasOpened, wasClosedDueToTemp, sum(wasClosedDueToTempAndSunAzimuth.values()))
 		if sum([wasOpened, wasClosedDueToTemp]) > 0:
 			assert sum(wasClosedDueToTempAndSunAzimuth.values()) == 0, "When one of the wasOpened and wasClosedDueToTempAndSunAzimuth is set, wasClosedDueToTempAndSunAzimuth must not be set as these are preceding in priority. wasOpened={}, wasClosedDueToTemp={}, sum(wasClosedDueToTempAndSunAzimuth.values())={}".format(wasOpened, wasClosedDueToTemp, sum(wasClosedDueToTempAndSunAzimuth.values()))
-		if sum([wasOpened, wasClosedDueToTemp]) == 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) == 0:
-			assert datetimeLastMovedWindSun is None, "datetimeLastMovedWindSun must be None when none of wasOpened, wasClosedDueToTemp] and sum(wasClosedDueToTempAndSunAzimuth.values() is set"
-		else:
+		if not (sum([wasOpened, wasClosedDueToTemp]) == 0 and sum(wasClosedDueToTempAndSunAzimuth.values()) == 0):
 			assert datetimeLastMovedWindSun is not None, "datetimeLastMovedWindSun must not be None when any of wasOpened, wasClosedDueToTemp] and sum(wasClosedDueToTempAndSunAzimuth.values() are set"
+			# datetimeLastMovedWindSun can be not None after restoring the state of rollers (e.g., sun direction condition no longer met) - so inverse assertion for "else" branch does not work
 
 
 		try:
