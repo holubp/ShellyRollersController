@@ -478,7 +478,7 @@ with open(args.configFile) as configFile:
 
 
 ephem_home = ephem.Observer()
-ephem_home.lat, ephem_home.lon = city.latitude, city.longitude
+ephem_home.lat, ephem_home.lon, ephem_home.elevation = str(city.latitude), str(city.longitude), int(city.elevation)
 ephem_moon = ephem.Moon()
 
 if not os.path.isfile(gaugeFile):
