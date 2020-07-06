@@ -27,6 +27,8 @@ While more complex systematic solutions exists (such as home-assistant.io), this
   * APscheduler
     * pip install APscheduler
     * pip install APScheduler==3.2.0 (for older Python 2.7 versions)
+  * ephem
+    * pip install ephem
 
 ## My current configuration
 

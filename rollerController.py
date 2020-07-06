@@ -44,7 +44,8 @@ class ExtendAction(argparse.Action):
 
 
 from astral import Astral, Location
-
+import ephem
+from math import degrees
 
 import logging as log
 import sys
@@ -476,6 +477,10 @@ with open(args.configFile) as configFile:
 		city.elevation = config['location'].get('elevation', city.elevation)
 
 
+ephem_home = ephem.Observer()
+ephem_home.lat, ephem_home.lon = city.latitude, city.longitude
+ephem_moon = ephem.Moon()
+
 if not os.path.isfile(gaugeFile):
 	print "Gauge file " + gaugeFile + " does not exist!"
 	exit(1)
@@ -682,6 +687,13 @@ def main_code():
 			assert datetimeLastMovedWindSun is not None, "datetimeLastMovedWindSun must not be None when any of wasOpened, wasClosedDueToTemp] and sum(wasClosedDueToTempAndSunAzimuth.values() are set"
 			# datetimeLastMovedWindSun can be not None after restoring the state of rollers (e.g., sun direction condition no longer met) - so inverse assertion for "else" branch does not work
 
+		ephem_home.date = datetime.datetime.utcnow()
+		ephem_moon.compute(ephem_home)
+		moon_azimuth  = round(degrees(float(ephem_moon.az)),1)
+		moon_altitude = round(degrees(float(ephem_moon.alt)),1)
+		moon_illum = round(ephem_moon.phase,1)
+		logger.debug("Moon info: azimuth={}deg, altitude={}deg, phase={}".format(moon_azimuth, moon_altitude, moon_illum))
+		logger.debug("Moon details: az={m.az} alt={m.alt} ra={m.ra}, dec={m.dec} dist={dist:.1f} for location {l.lat:f},{l.lon:f} at {l.date!s}".format(m=ephem_moon,l=ephem_home,dist=ephem_moon.earth_distance*149598000))
 
 		try:
 			with open(gaugeFile) as gaugeFile_json:
