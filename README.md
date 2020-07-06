@@ -16,7 +16,7 @@ While more complex systematic solutions exists (such as home-assistant.io), this
   * DateTime
     * pip install DateTime
   * Enum
-    * pip install Enum
+    * pip install enum34
   * requests
     * pip install requests
   * statistics
