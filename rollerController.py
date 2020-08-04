@@ -350,8 +350,8 @@ class ShellyRollerController:
 
 	def __saveState(self):
 		# wait until roller gets into stabilized state
+		state = self.waitUntilStopGetState()
 		try:
-			state = self.waitUntilStopGetState()
 			logger.debug("Roller %s: Acquiring lock to save state", self)
 			self.__savedStateLock.acquire()
 			logger.debug("Roller %s: Acquired lock to save state", self)
