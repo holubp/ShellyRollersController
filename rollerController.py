@@ -248,7 +248,9 @@ class ShellyRollerController:
 			state = shellyRollerControllerEmulator.getState()
 		else:
 			resp = self.getHTTPResp('/roller/0/state')
-			if resp.status_code != 200:
+                        if resp is None:
+				raise ShellyRollerControllerException('Roller %s: Failed to connect' % (self))
+                        elif resp.status_code != 200:
 				raise ShellyRollerControllerException('Roller %s: Unable to get state ... received HTTP return code %s' % (self, resp.status_code))
 			else:
 				state = resp.json()
@@ -417,14 +419,15 @@ class ShellyRollerController:
 				if isinstance(request, ShellyRollerControllerRequestEvent):
 					logger.debug("Roller %s: modifying restore state to %s", self, request.targetPos)
 					self.overrideSavedStatePos(request.targetPos)
-				elif isinstance(request, ShellyRollerControllerRequestWind) and request.action == ShellyRollerControllerRequestWindType.RESTORE:
-					logger.debug("Roller %s: submitting state restore request %s", self, request)
-					try:
-						self.requestQueue.put(request, block=True, timeout=2)
-					except Queue.Full:
-						logger.warn("Roller %s: request queue for roller is full - not submitting request %s", self, request)
-				else:
-					logger.warn("Roller %s: received wind-/sun-related request while __savedState == True - not submitting request %s", self, request)
+                                elif isinstance(request, ShellyRollerControllerRequestWind):
+                                        if request.action == ShellyRollerControllerRequestWindType.RESTORE:
+                                            logger.debug("Roller %s: submitting state restore request %s", self, request)
+                                        else:
+                                            logger.debug("Roller %s: submitting state new wind-/sun-related request %s, while __savedState == True", self, request)
+                                        try:
+                                                self.requestQueue.put(request, block=True, timeout=2)
+                                        except Queue.Full:
+                                                logger.warn("Roller %s: request queue for roller is full - not submitting request %s", self, request)
 		finally:
 			self.__savedStateLock.release()
 			logger.debug("Roller %s: Released lock to submit request", self)
@@ -659,7 +662,7 @@ def main_code():
 	scheduleSunJob(requestPositionAllRollers, 'dawn', args=[2])
 	scheduleSunJob(requestPositionAllRollers, 'sunrise', args=[5])
 	#scheduleSunJob(requestPositionAllRollers(0), 'sunset', offsetSeconds=-12500, minTime=datetime.time(hour=19, minute=00), maxTime=datetime.time(hour=21, minute=00))
-	scheduleSunJob(requestPositionAllRollers, 'dusk', args=[0], maxTime=datetime.time(hour=21, minute=00))
+	scheduleSunJob(requestPositionAllRollers, 'dusk', args=[1], maxTime=datetime.time(hour=21, minute=00))
 
 	if args.testRollers:
 		scheduler.add_job(logDebugScheduledJobList, 'interval', seconds=5)
