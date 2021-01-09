@@ -1,7 +1,8 @@
 #!/bin/bash
 
 sleep 60
-LOGDIR=`fgrep /dev/sda1 /proc/mounts | cut -d " " -f 2`
+DEVICE="5A46-F75F"
+LOGDIR=$(blkid -t UUID=${DEVICE} -l -o list | fgrep ${DEVICE} | awk '{print $3}')
 if [[ $LOGDIR == /media/* ]] ; then
 	while [[ ! -f /tmp/gauge-data.txt ]] ; do
 		sleep 1
