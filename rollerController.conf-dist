@@ -2,7 +2,7 @@
    "rollers":[
       {
          "name":"1B3AFF",
-         "IP":"192.168.1.2",
+         "hostname":"shellyswitch25-1B3AFF.home",
          "rollerUsername":"user",
          "rollerPassword":"password"
          "solarAzimuthMin":160,

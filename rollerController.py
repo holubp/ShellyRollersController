@@ -1,6 +1,8 @@
 #!/usr/bin/python
 # vim:ts=8:sw=8:tw=0:noet
 
+import socket
+
 import requests
 from requests.auth import HTTPBasicAuth
 import requests.exceptions
@@ -189,7 +191,7 @@ class ShellyRollerControllerException(Exception):
 
 class ShellyRollerController:
 
-	def __init__(self, name, IP, authUserName, authPassword, solarAzimuthMin, solarAzimuthMax):
+	def __init__(self, name, hostname, authUserName, authPassword, solarAzimuthMin, solarAzimuthMax):
 		assert isinstance(authUserName, str), "Expected string, got " + str(type(authUserName))
 		assert isinstance(authPassword, str), "Expected string, got " + str(type(authPassword))
 		assert isinstance(solarAzimuthMin, int), "Expected int, got " + str(type(solarAzimuthMin))
@@ -197,7 +199,8 @@ class ShellyRollerController:
 
 		self.requestQueue = Queue.Queue()
 		self.name = name
-		self.IP = IP
+		self.hostname = hostname
+                self.IP = socket.gethostbyname(hostname)
 		self.authUserName = authUserName
 		self.authPassword = authPassword
 		self.solarAzimuthMin = solarAzimuthMin
@@ -215,18 +218,18 @@ class ShellyRollerController:
 		self.mainThread.start()
 		logger.info("Roller %s: Roller thread started", self)
 
-	def getNameIP(self):
-		return str(self.name + '/' + self.IP)
+	def getNameHostname(self):
+		return str(self.name + '/' + self.hostname)
 
 	def __str__(self):
-		return self.getNameIP()
+		return self.getNameHostname()
 
 	def getHTTPResp(self, urlPath):
 		assert isinstance(urlPath, str)
 		assert not args.dryrun, "getHTTPResp should not be called at all when in the dry run mode"
 		resp = None
 		connectionTry = 0
-		targetUrl = 'http://' + self.IP + urlPath
+		targetUrl = 'http://' + self.hostname + urlPath
 		try:
 			while connectionTry < CONNECTIONSMAXRETRIES:
 				try:
@@ -466,7 +469,7 @@ with open(args.configFile) as configFile:
 			exec(k + " = config['thresholds'].get('" + k + "', " + k + ")")
 	if "rollers" in config:
 		for roller in config['rollers']:
-			rollers.append(ShellyRollerController(roller['name'], str(roller['IP']), str(roller['rollerUsername']), str(roller['rollerPassword']), roller['solarAzimuthMin'], roller['solarAzimuthMax']))
+			rollers.append(ShellyRollerController(roller['name'], str(roller['hostname']), str(roller['rollerUsername']), str(roller['rollerPassword']), roller['solarAzimuthMin'], roller['solarAzimuthMax']))
 	if "WeeWxGaugeFile" in config:
 		gaugeFile = config['WeeWxGaugeFile'].get('location', gaugeFile)
 		sleepTime = config['WeeWxGaugeFile'].get('readPeriodSecs', sleepTime)
@@ -747,7 +750,8 @@ def main_code():
 				timeDiffMinutes = int(timeDiff.total_seconds() / 60.0)
 
 			if wlatestMonitor.isFull():
-				if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold:
+                                # XXX: I have added a temporary testing hack to get rollers up in the night
+				if wlatestMonitor.getAvg() > avgWindThreshold or wgustMonitor.getAvg() > avgGustThreshold or ( not ( datetime.time(6,00) < datetime.datetime.now().time() < datetime.time(22,00) ) and wlatestMonitor.getAvg() > 5.0 ):
 					# this is normal condition to raise the rollers
 					logger.debug("Wind is above the set threshold: wlatestMonitor.getAvg()={wl} avgWindThreshold={aWT} wgustMonitor.getAvg()={wg} avgGustThreshold={aGT}".format(wl=wlatestMonitor.getAvg(), aWT=avgWindThreshold, wg=wgustMonitor.getAvg(), aGT=avgGustThreshold))
 					if not wasOpened:
@@ -767,12 +771,13 @@ def main_code():
 						if timeDiffMinutes >= timeOpenThresholdMinutes:
 							for r in rollers:
 								if r.getPos() != 100:
-									logger.info("Re-rising roller " + r.getNameIP() + " - something has closed them in the meantime")
+									logger.info("Re-rising roller " + r.getNameHostname() + " - something has closed them in the meantime")
 									r.submitRequest(ShellyRollerControllerRequestWind(ShellyRollerControllerRequestWindType.OPEN))
 									datetimeLastMovedWindSun = datetime.datetime.now()
 
 				# restoring is only done when the wind/gusts drop substantially - that is windRestoreCoefficiet time the thresholds
-				elif wasOpened and wlatestMonitor.getAvg() < windRestoreCoefficiet*avgWindThreshold and wgustMonitor.getAvg() < windRestoreCoefficiet*avgGustThreshold:
+                                # XXX: I have added a temporary testing hack to get rollers up in the night
+				elif wasOpened and wlatestMonitor.getAvg() < windRestoreCoefficiet*avgWindThreshold and wgustMonitor.getAvg() < windRestoreCoefficiet*avgGustThreshold and ( datetime.time(6,00) < datetime.datetime.now().time() < datetime.time(22,00) ) :
 					if timeDiffMinutes is None or timeDiffMinutes >= timeRestoreThresholdMinutes:
 						logger.info("Restoring rollers after wind died down")
 						wasOpened = False
